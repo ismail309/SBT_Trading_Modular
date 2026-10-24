@@ -9,84 +9,20 @@
 #include "SBT_Entry_Models.mqh"
 
 //+------------------------------------------------------------------+
-//| Check Partial Profit                                             |
+//| Check Partial Profit - DISABLED                                  |
 //+------------------------------------------------------------------+
 void CheckPartialProfit()
 {
-   if(!positionOpen) return;
-   if(!UseBreakeven) return;
-   if(partialProfitTaken) return;
-   if(currentLevel3Price <= 0) return;
-   if(mainPositionTicket == 0) return;
-   if(!PositionSelectByTicket(mainPositionTicket)) return;
-   if(PositionGetString(POSITION_SYMBOL) != _Symbol) return;
-   if(PositionGetInteger(POSITION_MAGIC) != ea_magic) return;
-
-   long posType = PositionGetInteger(POSITION_TYPE);
-   double currentPrice = SymbolInfoDouble(_Symbol, posType == POSITION_TYPE_BUY ? SYMBOL_BID : SYMBOL_ASK);
-   double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-   double currentVolume = PositionGetDouble(POSITION_VOLUME);
-   double currentTP = PositionGetDouble(POSITION_TP);
-
-   bool level3Reached = false;
-   if(posType == POSITION_TYPE_BUY)
-      level3Reached = (currentPrice >= currentLevel3Price);
-   else if(posType == POSITION_TYPE_SELL)
-      level3Reached = (currentPrice <= currentLevel3Price);
-
-   if(!level3Reached) return;
-
-   double partialLot = currentVolume * (PartialProfitPercent / 100.0);
-   double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-   if(step <= 0) step = 0.01;
-   partialLot = MathFloor(partialLot / step) * step;
-   double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   if(partialLot < minLot) partialLot = minLot;
-
-   if(partialLot >= minLot && partialLot < currentVolume)
-   {
-      if(trade.PositionClosePartial(mainPositionTicket, partialLot))
-      {
-         partialProfitTaken = true;
-         double remainingLot = currentVolume - partialLot;
-         if(remainingLot > 0)
-         {
-            if(PositionSelectByTicket(mainPositionTicket))
-            {
-               MqlTradeRequest modifyRequest = {};
-               MqlTradeResult modifyResult = {};
-
-               modifyRequest.action = TRADE_ACTION_SLTP;
-               modifyRequest.position = mainPositionTicket;
-               modifyRequest.symbol = _Symbol;
-               modifyRequest.sl = entryPrice;
-               modifyRequest.tp = currentTP;
-               modifyRequest.magic = ea_magic;
-
-               OrderSend(modifyRequest, modifyResult);
-            }
-         }
-      }
-   }
-   else
-   {
-      if(trade.PositionClose(mainPositionTicket))
-      {
-         partialProfitTaken = true;
-         positionOpen = false;
-      }
-   }
+   return; // Partial profits removed per request
 }
 
 //+------------------------------------------------------------------+
-//| Update Position Management (Breakeven)                           |
+//| Update Position Management (Move SL to BE at 1:1 RR)             |
 //+------------------------------------------------------------------+
 void UpdatePositionManagement()
 {
    if(!positionOpen) return;
    if(!UseBreakeven) return;
-   if(partialProfitTaken) return;
-   if(currentLevel3Price <= 0) return;
    if(mainPositionTicket == 0) return;
    if(!PositionSelectByTicket(mainPositionTicket)) return;
    if(PositionGetString(POSITION_SYMBOL) != _Symbol) return;
@@ -94,29 +30,49 @@ void UpdatePositionManagement()
 
    long posType = PositionGetInteger(POSITION_TYPE);
    double currentPrice = SymbolInfoDouble(_Symbol, posType == POSITION_TYPE_BUY ? SYMBOL_BID : SYMBOL_ASK);
-   double currentSL = PositionGetDouble(POSITION_SL);
    double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   double currentSL = PositionGetDouble(POSITION_SL);
    double currentTP = PositionGetDouble(POSITION_TP);
 
-   bool level3Reached = false;
+   // Use the ACTUAL SL from the position to calculate risk. 
+   // If currentSL is 0 (unlikely), fallback to mainPositionSL.
+   double riskSL = (currentSL > 0) ? currentSL : mainPositionSL;
+   double initialRisk = MathAbs(entryPrice - riskSL);
+
+   // Avoid division by zero
+   if(initialRisk <= 0) return;
+
+   // Calculate Current RR
+   double rrCurrent = 0;
    if(posType == POSITION_TYPE_BUY)
-      level3Reached = (currentPrice >= currentLevel3Price);
+      rrCurrent = (currentPrice - entryPrice) / initialRisk;
    else if(posType == POSITION_TYPE_SELL)
-      level3Reached = (currentPrice <= currentLevel3Price);
+      rrCurrent = (entryPrice - currentPrice) / initialRisk;
 
-   if(level3Reached && currentSL != entryPrice)
+   // If we reach 1:1 RR, and SL is not yet at BE
+   if(rrCurrent >= BreakevenTriggerRR)
    {
-      MqlTradeRequest request = {};
-      MqlTradeResult result = {};
+      bool slNeedsUpdate = false;
+      if(posType == POSITION_TYPE_BUY && currentSL < entryPrice) slNeedsUpdate = true;
+      if(posType == POSITION_TYPE_SELL && currentSL > entryPrice) slNeedsUpdate = true;
 
-      request.action = TRADE_ACTION_SLTP;
-      request.position = mainPositionTicket;
-      request.symbol = _Symbol;
-      request.sl = entryPrice;
-      request.tp = currentTP;
-      request.magic = ea_magic;
+      if(slNeedsUpdate)
+      {
+         MqlTradeRequest request = {};
+         MqlTradeResult result = {};
 
-      OrderSend(request, result);
+         request.action = TRADE_ACTION_SLTP;
+         request.position = mainPositionTicket;
+         request.symbol = _Symbol;
+         request.sl = entryPrice;
+         request.tp = currentTP;
+         request.magic = ea_magic;
+         
+         if(!OrderSend(request, result))
+            Print("❌ Failed to move SL to BE. Error: ", result.retcode);
+         else
+            Print("✅ SL moved to Breakeven at price: ", entryPrice);
+      }
    }
 }
 

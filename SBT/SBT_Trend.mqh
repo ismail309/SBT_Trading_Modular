@@ -87,10 +87,10 @@ void SwitchToBullish(double closePrice, datetime currentBarTime)
    Print("🔄 SWITCHING TO BULLISH TREND (Bearish → Bullish)");
 
    if(szTopPrice > 0 && szBottomPrice > 0 && szDrawTime > 0)
-      DrawBBB(szTopPrice, szBottomPrice, szDrawTime);
+      DrawBBB(szTopPrice, szBottomPrice, szDrawTime, currentBarTime);
 
    if(mbTopPrice > 0 && mbBottomPrice > 0 && mbDrawTime > 0)
-      DrawQML(mbTopPrice, mbBottomPrice, mbDrawTime);
+      DrawQML(mbTopPrice, mbBottomPrice, mbDrawTime, currentBarTime);
 
    if(currentLevel3Price > 0 && level1BreakTime > 0)
    {
@@ -172,6 +172,13 @@ void SwitchToBullish(double closePrice, datetime currentBarTime)
    mbTopPrice = 0;
    mbBottomPrice = 0;
    mbDrawTime = 0;
+   mbConfirmationTime = 0;
+   mbEntryCount = 0;
+   mbPositionTicket = 0;
+   
+   dzRightEdgeTime = 0;
+   szRightEdgeTime = 0;
+   mbRightEdgeTime = 0;
 
    currentLevel3Price = 0;
    level3DrawTime = 0;
@@ -198,6 +205,8 @@ void SwitchToBullish(double closePrice, datetime currentBarTime)
    ObjectDelete(0, "ChoCh_Label");
    ObjectDelete(0, "SL_Line");
    ObjectDelete(0, "SL_Label");
+   ObjectDelete(0, "SBT3_FVG_Rectangle");
+   ObjectDelete(0, "SBT3_FVG_Label");
 
    Print("✅ BULLISH TREND ACTIVATED");
 }
@@ -210,10 +219,10 @@ void SwitchToBearish(double closePrice, datetime currentBarTime)
    Print("🔄 SWITCHING TO BEARISH TREND (Bullish → Bearish)");
 
    if(dzTopPrice > 0 && dzBottomPrice > 0 && dzDrawTime > 0)
-      DrawSBB(dzTopPrice, dzBottomPrice, dzDrawTime);
+      DrawSBB(dzTopPrice, dzBottomPrice, dzDrawTime, currentBarTime);
 
    if(mbTopPrice > 0 && mbBottomPrice > 0 && mbDrawTime > 0)
-      DrawQML(mbTopPrice, mbBottomPrice, mbDrawTime);
+      DrawQML(mbTopPrice, mbBottomPrice, mbDrawTime, currentBarTime);
 
    if(currentLevel3Price > 0 && level1BreakTime > 0)
    {
@@ -289,6 +298,10 @@ void SwitchToBearish(double closePrice, datetime currentBarTime)
    mbTopPrice = 0;
    mbBottomPrice = 0;
    mbDrawTime = 0;
+   
+   dzRightEdgeTime = 0;
+   szRightEdgeTime = 0;
+   mbRightEdgeTime = 0;
 
    currentLevel3Price = 0;
    level3DrawTime = 0;
@@ -315,6 +328,8 @@ void SwitchToBearish(double closePrice, datetime currentBarTime)
    ObjectDelete(0, "ChoCh_Label");
    ObjectDelete(0, "SL_Line");
    ObjectDelete(0, "SL_Label");
+   ObjectDelete(0, "SBT3_FVG_Rectangle");
+   ObjectDelete(0, "SBT3_FVG_Label");
 
    Print("✅ BEARISH TREND ACTIVATED with SBB, QML, DT");
 }
@@ -334,12 +349,25 @@ void CleanupMSSZonesKeepNormal()
    ObjectDelete(0, "SBB_Label");
    ObjectDelete(0, "DT_Rectangle");
    ObjectDelete(0, "DT_Label");
+   ObjectDelete(0, "SBT3_FVG_Rectangle");
+   ObjectDelete(0, "SBT3_FVG_Label");
+   
+   // Cleanup SBT-2 Overlap marker
+   ObjectDelete(0, "SBT2_Overlap_Box");
+   ObjectDelete(0, "SBT2_Overlap_Label");
+   
+   sbt2_saved_extreme = 0;
+   mbFvgFound = false;
+   mbFvgSlLevel = 0;
+   mbActiveEntryModel = 0;
+   mbActiveFvgExtreme = 0;
 
    bbbConfirmed = false;
    bbbMitigated = false;
    bbbTopPrice = 0;
    bbbBottomPrice = 0;
    bbbDrawTime = 0;
+   bbbConfirmationTime = 0;
 
    qmlConfirmed = false;
    qmlMitigated = false;
@@ -358,12 +386,19 @@ void CleanupMSSZonesKeepNormal()
    sbbTopPrice = 0;
    sbbBottomPrice = 0;
    sbbDrawTime = 0;
+   sbbConfirmationTime = 0;
 
    dtConfirmed = false;
    dtMitigated = false;
    dtTopPrice = 0;
    dtBottomPrice = 0;
    dtDrawTime = 0;
+   
+   bbbRightEdgeTime = 0;
+   qmlRightEdgeTime = 0;
+   dbRightEdgeTime  = 0;
+   sbbRightEdgeTime = 0;
+   dtRightEdgeTime  = 0;
 
    trendContinuation = false;
    trendContinuationConfirmed = false;
@@ -478,13 +513,13 @@ void CheckTrendContinuation()
 //+------------------------------------------------------------------+
 void CleanupZonesForABCDE()
 {
+   // 1. Delete Level, ChoCh, DZ, SZ, MB objects
    ObjectDelete(0, "Level1_Line");
    ObjectDelete(0, "Level1_Label");
    ObjectDelete(0, "Level3_Line");
    ObjectDelete(0, "Level3_Label");
    ObjectDelete(0, "ChoCh_Line");
    ObjectDelete(0, "ChoCh_Label");
-   ObjectDelete(0, "ChoCh_Confirm_Label");
 
    ObjectDelete(0, "DemandZone_Rectangle");
    ObjectDelete(0, "DemandZone_Label");
@@ -493,10 +528,14 @@ void CleanupZonesForABCDE()
 
    ObjectDelete(0, "MB_Rectangle");
    ObjectDelete(0, "MB_Label");
+   
+   ObjectDelete(0, "SBT3_FVG_Rectangle");
+   ObjectDelete(0, "SBT3_FVG_Label");
 
    ObjectDelete(0, "SL_Line");
    ObjectDelete(0, "SL_Label");
 
+   // 2. Cleanup any ChoCh confirmation text
    int totalObjects = ObjectsTotal(0, -1, OBJ_TEXT);
    for(int i = totalObjects - 1; i >= 0; i--)
    {
@@ -504,6 +543,15 @@ void CleanupZonesForABCDE()
       if(StringFind(objName, "ChoCh_Confirm_Label") >= 0)
          ObjectDelete(0, objName);
    }
+   
+   // 4. Cleanup the SBT-2 Overlap marker
+   ObjectDelete(0, "SBT2_Overlap_Box");
+   ObjectDelete(0, "SBT2_Overlap_Label");
+   
+   
+   // 5. Cleanup MSS Zones (BBB, SBB, QML, DB, DT)
+   // This deletes the objects and resets the global state flags
+   CleanupMSSZonesKeepNormal();
 }
 
 #endif // SBT_TREND_MQH

@@ -9,6 +9,11 @@
 #include "SBT_Zones.mqh"
 
 //+------------------------------------------------------------------+
+//| Forward declarations                                             |
+//+------------------------------------------------------------------+
+void CleanupZonesForABCDE();
+
+//+------------------------------------------------------------------+
 //| ABCDE visuals                                                    |
 //+------------------------------------------------------------------+
 void DeleteABCDEVisuals()
@@ -491,59 +496,78 @@ void FireABCDEChoCh()
       Print("⚠️ ABCDE DZ/SZ: invalid C or D bar index (cBar=", cBar, " dBar=", dBar, ")");
    }
 
-   // ============ MB after BoS (scan C→D leg, closest close to C) ============
-   // Bearish: bearish candle in C→D with close > abcdeC, closest to abcdeC
-   //          → MB top = close, MB bottom = abcdeC
-   // Bullish: bullish candle in C→D with close < abcdeC, closest to abcdeC
-   //          → MB bottom = close, MB top = abcdeC
+   // ============ MB after BoS (scan B→C and C→D for closest close to C) ============
    int mbStartBar = -1;
    double mbTop = 0, mbBottom = 0;
    datetime mbStartTime = 0;
    double smallestDist = DBL_MAX;
 
-   if(cBar >= 0 && dBar >= 0)
+   int bBar = iBarShift(_Symbol, PERIOD_CURRENT, abcdeB_Time);
+   // dBar is already declared earlier in FireABCDEChoCh
+
+   Print("========================================");
+   Print("🔍 MB SCANNING - START");
+   Print("   Wave C Time: ", TimeToString(abcdeC_Time), " | Price: ", DoubleToString(abcdeC, _Digits));
+   Print("   Wave B Time: ", TimeToString(abcdeB_Time), " | Bar Index: ", bBar);
+   Print("   Wave D Time: ", TimeToString(abcdeD_Time), " | Bar Index: ", dBar);
+
+   if(bBar >= 0 && dBar >= 0)
    {
-      int mbFromBar = MathMin(cBar, dBar);
-      int mbToBar   = MathMax(cBar, dBar);
+      int startIndex = MathMax(bBar, dBar); // oldest (B)
+      int endIndex   = MathMin(bBar, dBar); // newest (D)
 
       if(bearishReversal)
       {
-         for(int i = mbFromBar; i <= mbToBar; i++)
+         // Find the BEARISH candle closest to C in B→D
+         for(int i = endIndex; i <= startIndex; i++)
          {
             if(IsBearish(i))
             {
                double close = iClose(_Symbol, PERIOD_CURRENT, i);
-               if(close > abcdeC)
+               double dist = MathAbs(close - abcdeC);
+               
+               Print("   [Bearish Candle] Bar: ", i, 
+                     " Time: ", TimeToString(iTime(_Symbol, PERIOD_CURRENT, i)),
+                     " O: ", DoubleToString(iOpen(_Symbol, PERIOD_CURRENT, i), _Digits),
+                     " H: ", DoubleToString(iHigh(_Symbol, PERIOD_CURRENT, i), _Digits),
+                     " L: ", DoubleToString(iLow(_Symbol, PERIOD_CURRENT, i), _Digits),
+                     " C: ", DoubleToString(close, _Digits),
+                     " | Dist to C: ", DoubleToString(dist, _Digits));
+                     
+               if(dist < smallestDist)
                {
-                  double dist = close - abcdeC;
-                  if(dist < smallestDist)
-                  {
-                     smallestDist = dist;
-                     mbStartBar = i;
-                     mbTop = close;
-                     mbBottom = abcdeC;
-                  }
+                  smallestDist = dist;
+                  mbStartBar = i;
+                  mbTop = abcdeC;
+                  mbBottom = close;
                }
             }
          }
       }
       else
       {
-         for(int i = mbFromBar; i <= mbToBar; i++)
+         // Find the BULLISH candle closest to C in B→D
+         for(int i = endIndex; i <= startIndex; i++)
          {
             if(IsBullish(i))
             {
                double close = iClose(_Symbol, PERIOD_CURRENT, i);
-               if(close < abcdeC)
+               double dist = MathAbs(close - abcdeC);
+               
+               Print("   [Bullish Candle] Bar: ", i, 
+                     " Time: ", TimeToString(iTime(_Symbol, PERIOD_CURRENT, i)),
+                     " O: ", DoubleToString(iOpen(_Symbol, PERIOD_CURRENT, i), _Digits),
+                     " H: ", DoubleToString(iHigh(_Symbol, PERIOD_CURRENT, i), _Digits),
+                     " L: ", DoubleToString(iLow(_Symbol, PERIOD_CURRENT, i), _Digits),
+                     " C: ", DoubleToString(close, _Digits),
+                     " | Dist to C: ", DoubleToString(dist, _Digits));
+                     
+               if(dist < smallestDist)
                {
-                  double dist = abcdeC - close;
-                  if(dist < smallestDist)
-                  {
-                     smallestDist = dist;
-                     mbStartBar = i;
-                     mbBottom = close;
-                     mbTop = abcdeC;
-                  }
+                  smallestDist = dist;
+                  mbStartBar = i;
+                  mbBottom = close;
+                  mbTop = abcdeC;
                }
             }
          }
@@ -552,15 +576,58 @@ void FireABCDEChoCh()
 
    if(mbStartBar >= 0 && mbTop > mbBottom)
    {
-      mbStartTime = iTime(_Symbol, PERIOD_CURRENT, mbStartBar);
-      DrawMitigationBlock(mbStartTime, mbBottom, mbTop, abcdeD_Time);
-      Print("📊 ABCDE MB drawn: Top=", mbTop, " Bottom=", mbBottom,
-            " StartBar=", mbStartBar, " Time=", TimeToString(mbStartTime),
-            " DistToC=", DoubleToString(smallestDist, _Digits));
+      // 1. Get the exact time of the candle we just found
+      datetime anchorCandleTime = iTime(_Symbol, PERIOD_CURRENT, mbStartBar);
+      
+      // 2. Apply the 2-candle left buffer to that exact time
+      int periodSeconds = PeriodSeconds(PERIOD_CURRENT);
+      mbStartTime = anchorCandleTime - (periodSeconds * ZoneLeftBufferCandles);
+      
+      // 3. Find the BoS confirmation candle time (where price actually closed past C)
+      datetime bosTime = iTime(_Symbol, PERIOD_CURRENT, 1); // fallback
+      for(int i = 1; i <= 20; i++)
+      {
+         double close = iClose(_Symbol, PERIOD_CURRENT, i);
+         if(bearishReversal && close < abcdeC) 
+         { 
+            bosTime = iTime(_Symbol, PERIOD_CURRENT, i); 
+            break; 
+         }
+         if(!bearishReversal && close > abcdeC) 
+         { 
+            bosTime = iTime(_Symbol, PERIOD_CURRENT, i); 
+            break; 
+         }
+      }
+      
+      Print("========================================");
+      Print("✅ MB FOUND & DRAWING");
+      Print("   Anchor Bar: ", mbStartBar);
+      Print("   Anchor Time: ", TimeToString(anchorCandleTime));
+      Print("   Start Time (with buffer): ", TimeToString(mbStartTime));
+      Print("   BoS Time (End): ", TimeToString(bosTime));
+      Print("   MB Top: ", DoubleToString(mbTop, _Digits));
+      Print("   MB Bottom: ", DoubleToString(mbBottom, _Digits));
+      Print("========================================");
+      
+      // 4. Draw from the left-buffered anchor to the BoS candle
+      DrawMitigationBlock(mbStartTime, mbBottom, mbTop, bosTime, bosTime);
    }
    else
    {
-      Print("⚠️ ABCDE MB: no qualifying candle found on C→D leg");
+      Print("⚠️ ABCDE MB: no qualifying candle found. Using C-D fallback.");
+      
+      int periodSeconds = PeriodSeconds(PERIOD_CURRENT);
+      datetime fallbackStart = abcdeC_Time - (periodSeconds * ZoneLeftBufferCandles);
+      datetime currentTime = iTime(_Symbol, PERIOD_CURRENT, 1);
+      
+      Print("   Fallback Start Time (C - buffer): ", TimeToString(fallbackStart));
+      Print("   Fallback End Time (current): ", TimeToString(currentTime));
+      
+      if(bearishReversal)
+         DrawMitigationBlock(fallbackStart, abcdeC, abcdeD, currentTime, currentTime);
+      else
+         DrawMitigationBlock(fallbackStart, abcdeD, abcdeC, currentTime, currentTime);
    }
 
    // ============ Light trend switch (no BBB/QML/DB/SBB/DT) ============

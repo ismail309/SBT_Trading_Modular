@@ -76,6 +76,17 @@ bool     mbMitigated                       = false;
 double   mbTopPrice                        = 0;
 double   mbBottomPrice                     = 0;
 datetime mbDrawTime                        = 0;
+datetime mbConfirmationTime                = 0; 
+
+//--- Zone right-edge tracking (dynamic width)
+datetime dzRightEdgeTime  = 0;
+datetime szRightEdgeTime  = 0;
+datetime mbRightEdgeTime  = 0;
+datetime bbbRightEdgeTime = 0;
+datetime qmlRightEdgeTime = 0;
+datetime dbRightEdgeTime  = 0;
+datetime dtRightEdgeTime  = 0;
+datetime sbbRightEdgeTime = 0;
 
 //--- PD Arrays & SL
 PDArray  demandCandle;
@@ -110,22 +121,8 @@ bool     bbbMitigated                      = false;
 double   bbbTopPrice                       = 0;
 double   bbbBottomPrice                    = 0;
 datetime bbbDrawTime                       = 0;
+datetime bbbConfirmationTime               = 0;
 
-// QML - previously MB
-bool     qmlConfirmed                      = false;
-bool     qmlMitigated                      = false;
-double   qmlTopPrice                       = 0;
-double   qmlBottomPrice                    = 0;
-datetime qmlDrawTime                       = 0;
-
-// DB (Double Bottom)
-bool     dbConfirmed                       = false;
-bool     dbMitigated                       = false;
-double   dbTopPrice                        = 0;
-double   dbBottomPrice                     = 0;
-datetime dbDrawTime                        = 0;
-double   dbCandleOpen                      = 0;
-double   dbCandleClose                     = 0;
 
 //--- SBB (Supply Breaker Block) - Bearish MSS
 bool     sbbConfirmed                      = false;
@@ -133,6 +130,25 @@ bool     sbbMitigated                      = false;
 double   sbbTopPrice                       = 0;
 double   sbbBottomPrice                    = 0;
 datetime sbbDrawTime                       = 0;
+datetime sbbConfirmationTime               = 0;
+
+// QML - previously MB
+bool     qmlConfirmed                      = false;
+bool     qmlMitigated                      = false;
+double   qmlTopPrice                       = 0;
+double   qmlBottomPrice                    = 0;
+datetime qmlDrawTime                       = 0;
+datetime qmlConfirmationTime               = 0;
+
+// DB (Double Bottom)
+bool     dbConfirmed                       = false;
+bool     dbMitigated                       = false;
+double   dbTopPrice                        = 0;
+double   dbBottomPrice                     = 0;
+datetime dbDrawTime                        = 0;
+datetime dbConfirmationTime                = 0;
+double   dbCandleOpen                      = 0;
+double   dbCandleClose                     = 0;
 
 //--- DT (Double Top) - Bearish MSS
 bool     dtConfirmed                       = false;
@@ -140,6 +156,7 @@ bool     dtMitigated                       = false;
 double   dtTopPrice                        = 0;
 double   dtBottomPrice                     = 0;
 datetime dtDrawTime                        = 0;
+datetime dtConfirmationTime                = 0;
 double   dtCandleOpen                      = 0;
 double   dtCandleClose                     = 0;
 
@@ -161,6 +178,22 @@ datetime abcdeD_Time                       = 0;
 int      abcdeRetraceRuleCount             = 0;
 bool     abcdeA_BodyBroken                 = false;
 bool     abcdeChochFiredThisBar            = false; // priority flag vs normal 2-candle ChoCh
+
+//--- SBT-2 and SBT-3 Entry Tracking
+int      mbEntryCount                      = 0;
+bool     mbWaitingReentry                  = false;
+ulong    mbPositionTicket                  = 0;
+datetime mbEntryAnchorTime                 = 0; // Tracks the specific overlap candle for SL
+double   mbActiveFvgExtreme                = 0;
+int      mbActiveEntryModel                = 0;
+
+//--- SBT-3 FVG Tracking
+bool     mbFvgFound                        = false;
+double   mbFvgTop                          = 0;
+double   mbFvgBottom                       = 0;
+double   mbFvgSlLevel                      = 0; // The FVG extreme (bottom for buy, top for sell)
+
+double   sbt2_saved_extreme                = 0;
 
 #endif // SBT_STATE_MQH
 //+------------------------------------------------------------------+

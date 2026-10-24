@@ -30,16 +30,19 @@ input int    SLFVGBufferPips               = 10;     // Stop Loss buffer in pips
 input int    MaxCandlesToScan              = 30;     // Maximum candles to scan for PD arrays
 input int    BackwardCandlesToScanForMB    = 10;     // Number of candles to scan backward for MB
 input double RiskPercent                   = 1.0;    // Risk percentage of equity
-input double RiskRewardRatio               = 6.0;    // Risk to Reward ratio (1:6 for full TP)
+input double RiskRewardRatio               = 3.0;    // Risk to Reward ratio (1:3 for full TP)
+input bool   UseBreakeven                  = true;   // Enable Breakeven after 1:1
+input double BreakevenTriggerRR            = 1.0;    // Move to breakeven at 1:1
 input int    MagicNumber                   = 123456; // EA Magic Number for position identification
-input double PartialProfitPercent          = 80.0;   // % of profit to book at Level 3
-input bool   UseBreakeven                  = true;   // Enable Breakeven after partial profit
 input int    MaxConcurrentPositions        = 5;      // Maximum positions allowed at once
 
-input int    ZoneExtensionLeft             = 100;    // Candles to extend zones LEFT
-input int    ZoneExtensionRight            = 100;    // Candles to extend zones RIGHT
+input int    ZoneLeftBufferCandles         = 2;      // Candles to the LEFT of anchor (buffer)
 
 input bool   ShowABCDEVisuals              = true;   // Draw ABCDE labels + trend lines
+
+input int MinZoneCandlesLeft               = 5;     // Minimum candles to the LEFT of zone
+input int MinZoneCandlesRight              = 5;     // Minimum candles to the RIGHT of zone
+input string BreakevenComment              = "Closed by BE"; // Comment when Breakeven is hit
 
 //--- PD Array Structure
 struct PDArray

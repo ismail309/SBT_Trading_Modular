@@ -3,6 +3,7 @@
 //|                                    Copyright 2026, sbt_trading   |
 //|  All chart drawing functions: SL, Levels 1/2/3, ChoCh, ABCDE     |
 //|  BoS, zones (MB/DZ/SZ/BBB/QML/DB/SBB/DT), ChoCh confirmation.    |
+//|  Includes dynamic right-edge extension and minimum time width.   |
 //+------------------------------------------------------------------+
 #ifndef SBT_DRAWING_MQH
 #define SBT_DRAWING_MQH
@@ -15,6 +16,25 @@
 void FindClosestPDArray(double level2Price, datetime level2Time, datetime referenceTime);
 void FindClosestPDArraySZ(double level2Price, datetime level2Time, datetime referenceTime);
 void EnsureSLPriceIsSet();
+
+//+------------------------------------------------------------------+
+//| Helper: Ensure zone has minimum visual time width                |
+//+------------------------------------------------------------------+
+void EnsureMinimumZoneTimeWidth(datetime &startTime, datetime &endTime)
+{
+   int periodSeconds = PeriodSeconds(PERIOD_CURRENT);
+   
+   // Calculate current width in candles
+   int timeDiff = (int)(endTime - startTime);
+   int candles = timeDiff / periodSeconds;
+   
+   // If it's too narrow, expand it
+   if(candles < MinZoneCandlesLeft + MinZoneCandlesRight)
+   {
+      startTime -= (periodSeconds * MinZoneCandlesLeft);
+      endTime   += (periodSeconds * MinZoneCandlesRight);
+   }
+}
 
 //+------------------------------------------------------------------+
 //| Draw Stop Loss Line                                              |
@@ -176,7 +196,7 @@ void DrawChoChConfirmation(double price, datetime time)
    double labelPrice = price - (25 * _Point);
    if(_Digits == 5 || _Digits == 3) labelPrice = price - (25 * _Point * 10);
 
-   string labelName = "ChoCh_Confirm_Label_" + TimeToString(time, TIME_DATE|TIME_MINUTES);
+   string labelName = "ChoCh_Confirm_Label_" + IntegerToString((long)time);
 
    ObjectCreate(0, labelName, OBJ_TEXT, 0, lineStartTime + periodSeconds, labelPrice);
    ObjectSetString(0, labelName, OBJPROP_TEXT, "ChoCh/MsS");
@@ -229,7 +249,7 @@ void DrawABCDEBoSLine(double bosPrice, datetime bosTime)
 //+------------------------------------------------------------------+
 //| Draw Mitigation Block (MB)                                       |
 //+------------------------------------------------------------------+
-void DrawMitigationBlock(datetime startTime, double bottomPrice, double topPrice, datetime referenceTime)
+void DrawMitigationBlock(datetime startTime, double bottomPrice, double topPrice, datetime referenceTime, datetime confirmationTime = 0)
 {
    Print("========================================");
    Print("📊 DRAW MB - START");
@@ -239,26 +259,47 @@ void DrawMitigationBlock(datetime startTime, double bottomPrice, double topPrice
    Print("   referenceTime: ", referenceTime > 0 ? TimeToString(referenceTime) : "NOT SET");
    Print("========================================");
 
-   if(startTime <= 0 || bottomPrice <= 0 || topPrice <= 0) return;
+   if(startTime <= 0 || bottomPrice <= 0 || topPrice <= 0 || referenceTime <= 0) return;
    if(topPrice <= bottomPrice) return;
 
    mbTopPrice = topPrice;
    mbBottomPrice = bottomPrice;
    mbDrawTime = startTime;
    mbMitigated = false;
+   mbConfirmationTime = (confirmationTime > 0) ? confirmationTime : referenceTime;
+   
+    // Reset SBT-2 state
+   mbEntryCount = 0;
+   mbWaitingReentry = false;
+   mbPositionTicket = 0;
+   mbEntryAnchorTime = 0;
+   
+   // NEW: Reset SBT-2 extreme
+   sbt2_saved_extreme = 0; 
+   
+   // Reset SBT-3 state
+   mbFvgFound = false;
+   mbFvgSlLevel = 0;
+   mbFvgTop = 0;
+   mbFvgBottom = 0;
+   mbActiveEntryModel = 0;
+   mbActiveFvgExtreme = 0;
 
    int periodSeconds = PeriodSeconds(PERIOD_CURRENT);
-   int leftCandles = ZoneExtensionLeft;
-   int rightCandles = ZoneExtensionRight;
+   
+   datetime lineStartTime = startTime;
+   datetime lineEndTime   = referenceTime;
 
-   if(leftCandles <= 0) leftCandles = 100;
-   if(rightCandles <= 0) rightCandles = 100;
-
-   datetime lineStartTime = referenceTime - (periodSeconds * leftCandles);
-   datetime lineEndTime = referenceTime + (periodSeconds * rightCandles);
+   EnsureMinimumZoneTimeWidth(lineStartTime, lineEndTime);
 
    ObjectDelete(0, "MB_Rectangle");
    ObjectDelete(0, "MB_Label");
+   // Delete old SBT-3 FVG when a new MB is drawn
+   ObjectDelete(0, "SBT3_FVG_Rectangle");
+   ObjectDelete(0, "SBT3_FVG_Label");
+   
+   ObjectDelete(0, "SBT2_Overlap_Box"); //
+   ObjectDelete(0, "SBT2_Overlap_Label"); //
 
    ObjectCreate(0, "MB_Rectangle", OBJ_RECTANGLE, 0, lineStartTime, topPrice, lineEndTime, bottomPrice);
    ObjectSetInteger(0, "MB_Rectangle", OBJPROP_COLOR, COLOR_MB);
@@ -268,6 +309,8 @@ void DrawMitigationBlock(datetime startTime, double bottomPrice, double topPrice
    ObjectSetInteger(0, "MB_Rectangle", OBJPROP_BACK, true);
    ObjectSetInteger(0, "MB_Rectangle", OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, "MB_Rectangle", OBJPROP_HIDDEN, false);
+
+   mbRightEdgeTime = lineEndTime;
 
    double midPrice = (topPrice + bottomPrice) / 2.0;
    datetime midTime = lineStartTime + (lineEndTime - lineStartTime) / 2;
@@ -279,7 +322,49 @@ void DrawMitigationBlock(datetime startTime, double bottomPrice, double topPrice
    ObjectSetString(0, "MB_Label", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, "MB_Label", OBJPROP_ANCHOR, ANCHOR_CENTER);
 
-   Print("✅ MB DRAWN: Bottom=", bottomPrice, " Top=", topPrice);
+   Print("✅ MB DRAWN: Bottom=", bottomPrice, " Top=", topPrice, 
+         " From=", TimeToString(lineStartTime), " To=", TimeToString(lineEndTime));
+}
+
+//+------------------------------------------------------------------+
+//| Draw FVG Overlap Zone (Wick-to-Wick, grows with MB)              |
+//+------------------------------------------------------------------+
+void DrawFVGRectangle(int fvgBar, bool isBullish, double fvgTop, double fvgBottom)
+{
+   // The FVG is formed by 3 candles: i+2, i+1, and i.
+   // fvgBar is the index 'i' (the newest candle).
+   // Start time is the oldest candle (i+2)
+   datetime startTime = iTime(_Symbol, PERIOD_CURRENT, fvgBar + 2); 
+   
+   // Right edge: Match the current MB right edge (or current time if not set)
+   datetime endTime = (mbRightEdgeTime > 0) ? mbRightEdgeTime : iTime(_Symbol, PERIOD_CURRENT, 1);
+   
+   string objName = "SBT3_FVG_Rectangle";
+   ObjectDelete(0, objName);
+   
+   // fvgTop and fvgBottom are the exact wick prices calculated in IsFVGOverlappingMB
+   ObjectCreate(0, objName, OBJ_RECTANGLE, 0, startTime, fvgTop, endTime, fvgBottom);
+   ObjectSetInteger(0, objName, OBJPROP_COLOR, isBullish ? clrLightGreen : clrLightPink);
+   ObjectSetInteger(0, objName, OBJPROP_STYLE, STYLE_DOT);
+   ObjectSetInteger(0, objName, OBJPROP_WIDTH, 1);
+   ObjectSetInteger(0, objName, OBJPROP_FILL, true);
+   ObjectSetInteger(0, objName, OBJPROP_BACK, true);
+   ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, objName, OBJPROP_HIDDEN, false);
+   
+   string labelName = "SBT3_FVG_Label";
+   ObjectDelete(0, labelName);
+   
+   double midPrice = (fvgTop + fvgBottom) / 2.0;
+   datetime midTime = startTime + (endTime - startTime) / 2;
+   
+   ObjectCreate(0, labelName, OBJ_TEXT, 0, midTime, midPrice);
+   ObjectSetString(0, labelName, OBJPROP_TEXT, "FVG");
+   ObjectSetInteger(0, labelName, OBJPROP_COLOR, isBullish ? clrGreen : clrRed);
+   ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 8);
+   ObjectSetString(0, labelName, OBJPROP_FONT, "Arial Bold");
+   ObjectSetInteger(0, labelName, OBJPROP_ANCHOR, ANCHOR_CENTER);
+   ObjectSetInteger(0, labelName, OBJPROP_SELECTABLE, false);
 }
 
 //+------------------------------------------------------------------+
@@ -300,14 +385,13 @@ void DrawDemandZone(datetime candleTime, double openPrice, double highPrice, dou
    dzConfirmationBar = 0;
 
    int periodSeconds = PeriodSeconds(PERIOD_CURRENT);
-   int leftCandles = ZoneExtensionLeft;
-   int rightCandles = ZoneExtensionRight;
-
-   if(leftCandles <= 0) leftCandles = 100;
-   if(rightCandles <= 0) rightCandles = 100;
+   int leftCandles = ZoneLeftBufferCandles;
+   if(leftCandles < 0) leftCandles = 2;
 
    datetime lineStartTime = referenceTime - (periodSeconds * leftCandles);
-   datetime lineEndTime = referenceTime + (periodSeconds * rightCandles);
+   datetime lineEndTime   = referenceTime + periodSeconds;
+
+   EnsureMinimumZoneTimeWidth(lineStartTime, lineEndTime);
 
    ObjectDelete(0, "DemandZone_Rectangle");
    ObjectDelete(0, "DemandZone_Label");
@@ -320,6 +404,8 @@ void DrawDemandZone(datetime candleTime, double openPrice, double highPrice, dou
    ObjectSetInteger(0, "DemandZone_Rectangle", OBJPROP_BACK, true);
    ObjectSetInteger(0, "DemandZone_Rectangle", OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, "DemandZone_Rectangle", OBJPROP_HIDDEN, false);
+
+   dzRightEdgeTime = lineEndTime;
 
    double midPrice = (openPrice + level2Price) / 2.0;
    datetime midTime = lineStartTime + (lineEndTime - lineStartTime) / 2;
@@ -354,14 +440,13 @@ void DrawSupplyZone(datetime candleTime, double openPrice, double highPrice, dou
    szConfirmationBar = 0;
 
    int periodSeconds = PeriodSeconds(PERIOD_CURRENT);
-   int leftCandles = ZoneExtensionLeft;
-   int rightCandles = ZoneExtensionRight;
-
-   if(leftCandles <= 0) leftCandles = 100;
-   if(rightCandles <= 0) rightCandles = 100;
+   int leftCandles = ZoneLeftBufferCandles;
+   if(leftCandles < 0) leftCandles = 2;
 
    datetime lineStartTime = referenceTime - (periodSeconds * leftCandles);
-   datetime lineEndTime = referenceTime + (periodSeconds * rightCandles);
+   datetime lineEndTime   = referenceTime + periodSeconds;
+
+   EnsureMinimumZoneTimeWidth(lineStartTime, lineEndTime);
 
    ObjectDelete(0, "SupplyZone_Rectangle");
    ObjectDelete(0, "SupplyZone_Label");
@@ -374,6 +459,8 @@ void DrawSupplyZone(datetime candleTime, double openPrice, double highPrice, dou
    ObjectSetInteger(0, "SupplyZone_Rectangle", OBJPROP_BACK, true);
    ObjectSetInteger(0, "SupplyZone_Rectangle", OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, "SupplyZone_Rectangle", OBJPROP_HIDDEN, false);
+
+   szRightEdgeTime = lineEndTime;
 
    double midPrice = (level2Price + openPrice) / 2.0;
    datetime midTime = lineStartTime + (lineEndTime - lineStartTime) / 2;
@@ -393,25 +480,26 @@ void DrawSupplyZone(datetime candleTime, double openPrice, double highPrice, dou
 //+------------------------------------------------------------------+
 //| Draw Bullish Breaker Block (BBB)                                 |
 //+------------------------------------------------------------------+
-void DrawBBB(double topPrice, double bottomPrice, datetime referenceTime)
+void DrawBBB(double topPrice, double bottomPrice, datetime anchorTime, datetime confirmationTime)
 {
-   if(topPrice <= 0 || bottomPrice <= 0 || referenceTime <= 0) return;
+   if(topPrice <= 0 || bottomPrice <= 0 || anchorTime <= 0 || confirmationTime <= 0) return;
    if(topPrice <= bottomPrice) return;
 
    bbbTopPrice = topPrice;
    bbbBottomPrice = bottomPrice;
-   bbbDrawTime = referenceTime;
+   bbbDrawTime = anchorTime;
+   bbbConfirmationTime = confirmationTime;
    bbbConfirmed = true;
    bbbMitigated = false;
 
    int periodSeconds = PeriodSeconds(PERIOD_CURRENT);
-   int leftCandles = ZoneExtensionLeft;
-   int rightCandles = ZoneExtensionRight;
-   if(leftCandles <= 0) leftCandles = 100;
-   if(rightCandles <= 0) rightCandles = 100;
+   int leftCandles = ZoneLeftBufferCandles;
+   if(leftCandles < 0) leftCandles = 2;
 
-   datetime lineStartTime = referenceTime - (periodSeconds * leftCandles);
-   datetime lineEndTime = referenceTime + (periodSeconds * rightCandles);
+   datetime lineStartTime = anchorTime - (periodSeconds * leftCandles);
+   datetime lineEndTime   = confirmationTime + periodSeconds;
+
+   EnsureMinimumZoneTimeWidth(lineStartTime, lineEndTime);
 
    ObjectDelete(0, "BBB_Rectangle");
    ObjectDelete(0, "BBB_Label");
@@ -425,6 +513,8 @@ void DrawBBB(double topPrice, double bottomPrice, datetime referenceTime)
    ObjectSetInteger(0, "BBB_Rectangle", OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, "BBB_Rectangle", OBJPROP_HIDDEN, false);
 
+   bbbRightEdgeTime = lineEndTime;
+
    double midPrice = (topPrice + bottomPrice) / 2.0;
    datetime midTime = lineStartTime + (lineEndTime - lineStartTime) / 2;
 
@@ -435,31 +525,33 @@ void DrawBBB(double topPrice, double bottomPrice, datetime referenceTime)
    ObjectSetString(0, "BBB_Label", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, "BBB_Label", OBJPROP_ANCHOR, ANCHOR_CENTER);
 
-   Print("BBB DRAWN: Top=", topPrice, " Bottom=", bottomPrice);
+   Print("BBB DRAWN: Top=", topPrice, " Bottom=", bottomPrice,
+         " anchor=", TimeToString(anchorTime), " confirmation=", TimeToString(confirmationTime));
 }
 
 //+------------------------------------------------------------------+
 //| Draw QML                                                         |
 //+------------------------------------------------------------------+
-void DrawQML(double topPrice, double bottomPrice, datetime referenceTime)
+void DrawQML(double topPrice, double bottomPrice, datetime anchorTime, datetime confirmationTime)
 {
-   if(topPrice <= 0 || bottomPrice <= 0 || referenceTime <= 0) return;
+   if(topPrice <= 0 || bottomPrice <= 0 || anchorTime <= 0 || confirmationTime <= 0) return;
    if(topPrice <= bottomPrice) return;
 
    qmlTopPrice = topPrice;
    qmlBottomPrice = bottomPrice;
-   qmlDrawTime = referenceTime;
+   qmlDrawTime = anchorTime;
+   qmlConfirmationTime = confirmationTime;
    qmlConfirmed = true;
    qmlMitigated = false;
 
    int periodSeconds = PeriodSeconds(PERIOD_CURRENT);
-   int leftCandles = ZoneExtensionLeft;
-   int rightCandles = ZoneExtensionRight;
-   if(leftCandles <= 0) leftCandles = 100;
-   if(rightCandles <= 0) rightCandles = 100;
+   int leftCandles = ZoneLeftBufferCandles;
+   if(leftCandles < 0) leftCandles = 2;
 
-   datetime lineStartTime = referenceTime - (periodSeconds * leftCandles);
-   datetime lineEndTime = referenceTime + (periodSeconds * rightCandles);
+   datetime lineStartTime = anchorTime - (periodSeconds * leftCandles);
+   datetime lineEndTime   = confirmationTime + periodSeconds;
+
+   EnsureMinimumZoneTimeWidth(lineStartTime, lineEndTime);
 
    ObjectDelete(0, "QML_Rectangle");
    ObjectDelete(0, "QML_Label");
@@ -473,6 +565,8 @@ void DrawQML(double topPrice, double bottomPrice, datetime referenceTime)
    ObjectSetInteger(0, "QML_Rectangle", OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, "QML_Rectangle", OBJPROP_HIDDEN, false);
 
+   qmlRightEdgeTime = lineEndTime;
+
    double midPrice = (topPrice + bottomPrice) / 2.0;
    datetime midTime = lineStartTime + (lineEndTime - lineStartTime) / 2;
 
@@ -483,15 +577,16 @@ void DrawQML(double topPrice, double bottomPrice, datetime referenceTime)
    ObjectSetString(0, "QML_Label", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, "QML_Label", OBJPROP_ANCHOR, ANCHOR_CENTER);
 
-   Print("QML DRAWN: Top=", topPrice, " Bottom=", bottomPrice);
+   Print("QML DRAWN: Top=", topPrice, " Bottom=", bottomPrice,
+         " anchor=", TimeToString(anchorTime), " confirmation=", TimeToString(confirmationTime));
 }
 
 //+------------------------------------------------------------------+
 //| Draw Double Bottom (DB)                                          |
 //+------------------------------------------------------------------+
-void DrawDB(datetime candleTime, double openPrice, double closePrice, double level3Price, datetime referenceTime)
+void DrawDB(datetime candleTime, double openPrice, double closePrice, double level3Price, datetime confirmationTime)
 {
-   if(candleTime <= 0 || openPrice <= 0 || closePrice <= 0 || level3Price <= 0) return;
+   if(candleTime <= 0 || openPrice <= 0 || closePrice <= 0 || level3Price <= 0 || confirmationTime <= 0) return;
    if(openPrice <= level3Price) return;
 
    dbCandleOpen = openPrice;
@@ -503,13 +598,13 @@ void DrawDB(datetime candleTime, double openPrice, double closePrice, double lev
    dbMitigated = false;
 
    int periodSeconds = PeriodSeconds(PERIOD_CURRENT);
-   int leftCandles = ZoneExtensionLeft;
-   int rightCandles = ZoneExtensionRight;
-   if(leftCandles <= 0) leftCandles = 100;
-   if(rightCandles <= 0) rightCandles = 100;
+   int leftCandles = ZoneLeftBufferCandles;
+   if(leftCandles < 0) leftCandles = 2;
 
-   datetime lineStartTime = referenceTime - (periodSeconds * leftCandles);
-   datetime lineEndTime = referenceTime + (periodSeconds * rightCandles);
+   datetime lineStartTime = candleTime - (periodSeconds * leftCandles);
+   datetime lineEndTime   = confirmationTime + periodSeconds;
+
+   EnsureMinimumZoneTimeWidth(lineStartTime, lineEndTime);
 
    ObjectDelete(0, "DB_Rectangle");
    ObjectDelete(0, "DB_Label");
@@ -522,6 +617,8 @@ void DrawDB(datetime candleTime, double openPrice, double closePrice, double lev
    ObjectSetInteger(0, "DB_Rectangle", OBJPROP_BACK, true);
    ObjectSetInteger(0, "DB_Rectangle", OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, "DB_Rectangle", OBJPROP_HIDDEN, false);
+
+   dbRightEdgeTime = lineEndTime;
 
    double midPrice = (openPrice + level3Price) / 2.0;
    datetime midTime = lineStartTime + (lineEndTime - lineStartTime) / 2;
@@ -537,25 +634,26 @@ void DrawDB(datetime candleTime, double openPrice, double closePrice, double lev
 //+------------------------------------------------------------------+
 //| Draw SBB (Supply Breaker Block)                                  |
 //+------------------------------------------------------------------+
-void DrawSBB(double topPrice, double bottomPrice, datetime referenceTime)
+void DrawSBB(double topPrice, double bottomPrice, datetime anchorTime, datetime confirmationTime)
 {
-   if(topPrice <= 0 || bottomPrice <= 0 || referenceTime <= 0) return;
+   if(topPrice <= 0 || bottomPrice <= 0 || anchorTime <= 0 || confirmationTime <= 0) return;
    if(topPrice <= bottomPrice) return;
 
    sbbTopPrice = topPrice;
    sbbBottomPrice = bottomPrice;
-   sbbDrawTime = referenceTime;
+   sbbDrawTime = anchorTime;
+   sbbConfirmationTime = confirmationTime;
    sbbConfirmed = true;
    sbbMitigated = false;
 
    int periodSeconds = PeriodSeconds(PERIOD_CURRENT);
-   int leftCandles = ZoneExtensionLeft;
-   int rightCandles = ZoneExtensionRight;
-   if(leftCandles <= 0) leftCandles = 100;
-   if(rightCandles <= 0) rightCandles = 100;
+   int leftCandles = ZoneLeftBufferCandles;
+   if(leftCandles < 0) leftCandles = 2;
 
-   datetime lineStartTime = referenceTime - (periodSeconds * leftCandles);
-   datetime lineEndTime = referenceTime + (periodSeconds * rightCandles);
+   datetime lineStartTime = anchorTime - (periodSeconds * leftCandles);
+   datetime lineEndTime   = confirmationTime + periodSeconds;
+
+   EnsureMinimumZoneTimeWidth(lineStartTime, lineEndTime);
 
    ObjectDelete(0, "SBB_Rectangle");
    ObjectDelete(0, "SBB_Label");
@@ -569,6 +667,8 @@ void DrawSBB(double topPrice, double bottomPrice, datetime referenceTime)
    ObjectSetInteger(0, "SBB_Rectangle", OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, "SBB_Rectangle", OBJPROP_HIDDEN, false);
 
+   sbbRightEdgeTime = lineEndTime;
+
    double midPrice = (topPrice + bottomPrice) / 2.0;
    datetime midTime = lineStartTime + (lineEndTime - lineStartTime) / 2;
 
@@ -578,14 +678,17 @@ void DrawSBB(double topPrice, double bottomPrice, datetime referenceTime)
    ObjectSetInteger(0, "SBB_Label", OBJPROP_FONTSIZE, 10);
    ObjectSetString(0, "SBB_Label", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, "SBB_Label", OBJPROP_ANCHOR, ANCHOR_CENTER);
+
+   Print("SBB DRAWN: Top=", topPrice, " Bottom=", bottomPrice,
+         " anchor=", TimeToString(anchorTime), " confirmation=", TimeToString(confirmationTime));
 }
 
 //+------------------------------------------------------------------+
 //| Draw Double Top (DT)                                             |
 //+------------------------------------------------------------------+
-void DrawDT(datetime candleTime, double openPrice, double closePrice, double level3Price, datetime referenceTime)
+void DrawDT(datetime candleTime, double openPrice, double closePrice, double level3Price, datetime confirmationTime)
 {
-   if(candleTime <= 0 || openPrice <= 0 || closePrice <= 0 || level3Price <= 0) return;
+   if(candleTime <= 0 || openPrice <= 0 || closePrice <= 0 || level3Price <= 0 || confirmationTime <= 0) return;
    if(openPrice >= level3Price) return;
 
    dtCandleOpen = openPrice;
@@ -597,13 +700,13 @@ void DrawDT(datetime candleTime, double openPrice, double closePrice, double lev
    dtMitigated = false;
 
    int periodSeconds = PeriodSeconds(PERIOD_CURRENT);
-   int leftCandles = ZoneExtensionLeft;
-   int rightCandles = ZoneExtensionRight;
-   if(leftCandles <= 0) leftCandles = 100;
-   if(rightCandles <= 0) rightCandles = 100;
+   int leftCandles = ZoneLeftBufferCandles;
+   if(leftCandles < 0) leftCandles = 2;
 
-   datetime lineStartTime = referenceTime - (periodSeconds * leftCandles);
-   datetime lineEndTime = referenceTime + (periodSeconds * rightCandles);
+   datetime lineStartTime = candleTime - (periodSeconds * leftCandles);
+   datetime lineEndTime   = confirmationTime + periodSeconds;
+
+   EnsureMinimumZoneTimeWidth(lineStartTime, lineEndTime);
 
    ObjectDelete(0, "DT_Rectangle");
    ObjectDelete(0, "DT_Label");
@@ -617,6 +720,8 @@ void DrawDT(datetime candleTime, double openPrice, double closePrice, double lev
    ObjectSetInteger(0, "DT_Rectangle", OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, "DT_Rectangle", OBJPROP_HIDDEN, false);
 
+   dtRightEdgeTime = lineEndTime;
+
    double midPrice = (level3Price + openPrice) / 2.0;
    datetime midTime = lineStartTime + (lineEndTime - lineStartTime) / 2;
 
@@ -626,6 +731,137 @@ void DrawDT(datetime candleTime, double openPrice, double closePrice, double lev
    ObjectSetInteger(0, "DT_Label", OBJPROP_FONTSIZE, 10);
    ObjectSetString(0, "DT_Label", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, "DT_Label", OBJPROP_ANCHOR, ANCHOR_CENTER);
+}
+
+//+------------------------------------------------------------------+
+//| Extend live zones' right edge to last closed bar                 |
+//| Called only on new-bar events (per design Q4).                   |
+//+------------------------------------------------------------------+
+void ExtendZoneRightEdges()
+{
+   datetime newRight = iTime(_Symbol, PERIOD_CURRENT, 1);
+   if(newRight <= 0) return;
+
+   // --- DZ ---
+   if(dzRightEdgeTime > 0 && !dzMitigated && ObjectFind(0, "DemandZone_Rectangle") >= 0)
+   {
+      if(newRight > dzRightEdgeTime)
+      {
+         ObjectSetInteger(0, "DemandZone_Rectangle", OBJPROP_TIME, 1, newRight);
+         dzRightEdgeTime = newRight;
+      }
+   }
+
+   // --- SZ ---
+   if(szRightEdgeTime > 0 && !szMitigated && ObjectFind(0, "SupplyZone_Rectangle") >= 0)
+   {
+      if(newRight > szRightEdgeTime)
+      {
+         ObjectSetInteger(0, "SupplyZone_Rectangle", OBJPROP_TIME, 1, newRight);
+         szRightEdgeTime = newRight;
+      }
+   }
+
+   // --- MB ---
+   if(mbRightEdgeTime > 0 && !mbMitigated && ObjectFind(0, "MB_Rectangle") >= 0)
+   {
+      if(newRight > mbRightEdgeTime)
+      {
+         ObjectSetInteger(0, "MB_Rectangle", OBJPROP_TIME, 1, newRight);
+         mbRightEdgeTime = newRight;
+         
+         // Extend the FVG right edge as well (if it exists)
+         if(mbFvgFound && ObjectFind(0, "SBT3_FVG_Rectangle") >= 0)
+         {
+            ObjectSetInteger(0, "SBT3_FVG_Rectangle", OBJPROP_TIME, 1, newRight);
+            
+            // Also update the label position
+            if(ObjectFind(0, "SBT3_FVG_Label") >= 0)
+            {
+               double fvgMid = (mbFvgTop + mbFvgBottom) / 2.0;
+               ObjectSetInteger(0, "SBT3_FVG_Label", OBJPROP_TIME, 0, newRight); // Move to new right edge
+               ObjectSetDouble(0, "SBT3_FVG_Label", OBJPROP_PRICE, 0, fvgMid);
+            }
+         }
+      }
+   }
+
+   // --- BBB ---
+   if(bbbRightEdgeTime > 0 && !bbbMitigated && ObjectFind(0, "BBB_Rectangle") >= 0)
+   {
+      if(newRight > bbbRightEdgeTime)
+      {
+         ObjectSetInteger(0, "BBB_Rectangle", OBJPROP_TIME, 1, newRight);
+         bbbRightEdgeTime = newRight;
+      }
+   }
+
+   // --- QML ---
+   if(qmlRightEdgeTime > 0 && !qmlMitigated && ObjectFind(0, "QML_Rectangle") >= 0)
+   {
+      if(newRight > qmlRightEdgeTime)
+      {
+         ObjectSetInteger(0, "QML_Rectangle", OBJPROP_TIME, 1, newRight);
+         qmlRightEdgeTime = newRight;
+      }
+   }
+
+   // --- DB ---
+   if(dbRightEdgeTime > 0 && !dbMitigated && ObjectFind(0, "DB_Rectangle") >= 0)
+   {
+      if(newRight > dbRightEdgeTime)
+      {
+         ObjectSetInteger(0, "DB_Rectangle", OBJPROP_TIME, 1, newRight);
+         dbRightEdgeTime = newRight;
+      }
+   }
+
+   // --- SBB ---
+   if(sbbRightEdgeTime > 0 && !sbbMitigated && ObjectFind(0, "SBB_Rectangle") >= 0)
+   {
+      if(newRight > sbbRightEdgeTime)
+      {
+         ObjectSetInteger(0, "SBB_Rectangle", OBJPROP_TIME, 1, newRight);
+         sbbRightEdgeTime = newRight;
+      }
+   }
+
+   // --- DT ---
+   if(dtRightEdgeTime > 0 && !dtMitigated && ObjectFind(0, "DT_Rectangle") >= 0)
+   {
+      if(newRight > dtRightEdgeTime)
+      {
+         ObjectSetInteger(0, "DT_Rectangle", OBJPROP_TIME, 1, newRight);
+         dtRightEdgeTime = newRight;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Draw SBT-2 Overlapping Candle Marker                             |
+//+------------------------------------------------------------------+
+void DrawSBT2OverlapMarker(datetime candleTime, double topPrice, double bottomPrice, string labelText)
+{
+   int periodSeconds = PeriodSeconds(PERIOD_CURRENT);
+   datetime startTime = candleTime;
+   datetime endTime = candleTime + periodSeconds;
+
+   ObjectDelete(0, "SBT2_Overlap_Box");
+   ObjectDelete(0, "SBT2_Overlap_Label");
+
+   ObjectCreate(0, "SBT2_Overlap_Box", OBJ_RECTANGLE, 0, startTime, topPrice, endTime, bottomPrice);
+   ObjectSetInteger(0, "SBT2_Overlap_Box", OBJPROP_COLOR, clrYellow);
+   ObjectSetInteger(0, "SBT2_Overlap_Box", OBJPROP_STYLE, STYLE_SOLID);
+   ObjectSetInteger(0, "SBT2_Overlap_Box", OBJPROP_WIDTH, 1);
+   ObjectSetInteger(0, "SBT2_Overlap_Box", OBJPROP_FILL, false);
+   ObjectSetInteger(0, "SBT2_Overlap_Box", OBJPROP_BACK, false);
+   ObjectSetInteger(0, "SBT2_Overlap_Box", OBJPROP_SELECTABLE, false);
+
+   ObjectCreate(0, "SBT2_Overlap_Label", OBJ_TEXT, 0, startTime + (periodSeconds/2), topPrice);
+   ObjectSetString(0, "SBT2_Overlap_Label", OBJPROP_TEXT, labelText);
+   ObjectSetInteger(0, "SBT2_Overlap_Label", OBJPROP_COLOR, clrYellow);
+   ObjectSetInteger(0, "SBT2_Overlap_Label", OBJPROP_FONTSIZE, 8);
+   ObjectSetInteger(0, "SBT2_Overlap_Label", OBJPROP_ANCHOR, ANCHOR_LOWER);
 }
 
 #endif // SBT_DRAWING_MQH

@@ -151,43 +151,61 @@ bool IsSZMitigatedAfterBoS(double zoneTop, int confirmationBar)
 //+------------------------------------------------------------------+
 void UpdateDZStatus()
 {
-   if(dzDrawTime == 0) return;
+   if(dzDrawTime == 0 || dzMitigated) return;
+   
+   int demandBar = iBarShift(_Symbol, PERIOD_CURRENT, dzDrawTime);
+   if(demandBar < 0) return;
 
+   // 1. Check for DZ Confirmation (A bullish candle closes above Demand Candle High)
    if(!dzConfirmed)
    {
-      double demandLow = 0, demandOpen = 0, demandClose = 0;
-      datetime confirmationTime = 0;
-      int breakingBar = FindBreakingCandleDZ(dzCandleHigh, dzDrawTime, demandLow, demandOpen, demandClose, confirmationTime);
-
-      if(breakingBar >= 0)
+      for(int i = 1; i < demandBar; i++)
       {
-         dzConfirmed = true;
-         dzConfirmationBar = breakingBar;
-         dzCandleLow = demandLow;
-
-         if(level1BreakTime > 0)
+         if(IsBullish(i) && iClose(_Symbol, PERIOD_CURRENT, i) > dzCandleHigh)
          {
-            if(IsDemandCandleMitigated(dzCandleHigh, dzCandleLow, dzDrawTime, confirmationTime, level1BreakTime))
-            {
-               dzMitigated = true;
-               if(ObjectFind(0, "DemandZone_Label") >= 0)
-                  ObjectSetString(0, "DemandZone_Label", OBJPROP_TEXT, "DZ (mitigated)");
-            }
+            dzConfirmed = true;
+            dzConfirmationBar = i;
+            break;
          }
       }
    }
 
-   if(dzConfirmed && !dzMitigated)
+   // 2. If DZ is not confirmed yet, we can't check mitigation
+   if(!dzConfirmed) return;
+
+   // 3. Check if Demand Candle was mitigated BEFORE the confirmation
+   // (If price entered the demand candle before the green candle closed above the high)
+   if(IsDemandCandleMitigated(dzCandleHigh, dzCandleLow, dzDrawTime, iTime(_Symbol, PERIOD_CURRENT, dzConfirmationBar), level1BreakTime))
    {
-      for(int i = dzConfirmationBar - 1; i >= 1; i--)
+      dzMitigated = true;
+      dzRightEdgeTime = 0;
+      if(ObjectFind(0, "DemandZone_Label") >= 0)
+         ObjectSetString(0, "DemandZone_Label", OBJPROP_TEXT, "DZ (mitigated)");
+      return;
+   }
+
+   // 4. Check for Mitigation AFTER BoS (only if level1BreakTime is valid)
+   // Scan from i=2 (older) to avoid conflicting with CheckSBT1Entry (which checks i=1)
+   if(level1BreakTime > 0)
+   {
+      int bosBar = iBarShift(_Symbol, PERIOD_CURRENT, level1BreakTime);
+      if(bosBar > 0)
       {
-         double close = iClose(_Symbol, PERIOD_CURRENT, i);
-         if(close < dzBottomPrice)
+         // Scan from the most recent candle backwards to the BoS candle
+         for(int i = 2; i < bosBar; i++)
          {
-            dzMitigated = true;
-            if(ObjectFind(0, "DemandZone_Label") >= 0)
-               ObjectSetString(0, "DemandZone_Label", OBJPROP_TEXT, "DZ (mitigated)");
-            break;
+            double high = iHigh(_Symbol, PERIOD_CURRENT, i);
+            double low  = iLow(_Symbol, PERIOD_CURRENT, i);
+            
+            // If any candle touches the DZ (wick or body)
+            if(high >= dzBottomPrice && low <= dzTopPrice)
+            {
+               dzMitigated = true;
+               dzRightEdgeTime = 0;
+               if(ObjectFind(0, "DemandZone_Label") >= 0)
+                  ObjectSetString(0, "DemandZone_Label", OBJPROP_TEXT, "DZ (mitigated)");
+               return;
+            }
          }
       }
    }
@@ -198,43 +216,59 @@ void UpdateDZStatus()
 //+------------------------------------------------------------------+
 void UpdateSZStatus()
 {
-   if(szDrawTime == 0) return;
+   if(szDrawTime == 0 || szMitigated) return;
+   
+   int supplyBar = iBarShift(_Symbol, PERIOD_CURRENT, szDrawTime);
+   if(supplyBar < 0) return;
 
+   // 1. Check for SZ Confirmation (A bearish candle closes below Supply Candle Low)
    if(!szConfirmed)
    {
-      double supplyHigh = 0, supplyOpen = 0, supplyClose = 0;
-      datetime confirmationTime = 0;
-      int breakingBar = FindBreakingCandleSZ(szCandleLow, szDrawTime, supplyHigh, supplyOpen, supplyClose, confirmationTime);
-
-      if(breakingBar >= 0)
+      for(int i = 1; i < supplyBar; i++)
       {
-         szConfirmed = true;
-         szConfirmationBar = breakingBar;
-         szCandleHigh = supplyHigh;
-
-         if(level1BreakTime > 0)
+         if(IsBearish(i) && iClose(_Symbol, PERIOD_CURRENT, i) < szCandleLow)
          {
-            if(IsSupplyCandleMitigated(szCandleHigh, szCandleLow, szDrawTime, level1BreakTime))
-            {
-               szMitigated = true;
-               if(ObjectFind(0, "SupplyZone_Label") >= 0)
-                  ObjectSetString(0, "SupplyZone_Label", OBJPROP_TEXT, "SZ (mitigated)");
-            }
+            szConfirmed = true;
+            szConfirmationBar = i;
+            break;
          }
       }
    }
 
-   if(szConfirmed && !szMitigated)
+   // 2. If SZ is not confirmed yet, we can't check mitigation
+   if(!szConfirmed) return;
+
+   // 3. Check if Supply Candle was mitigated BEFORE the confirmation
+   if(IsSupplyCandleMitigated(szCandleHigh, szCandleLow, szDrawTime, level1BreakTime))
    {
-      for(int i = szConfirmationBar - 1; i >= 1; i--)
+      szMitigated = true;
+      szRightEdgeTime = 0;
+      if(ObjectFind(0, "SupplyZone_Label") >= 0)
+         ObjectSetString(0, "SupplyZone_Label", OBJPROP_TEXT, "SZ (mitigated)");
+      return;
+   }
+
+   // 4. Check for Mitigation AFTER BoS
+   if(level1BreakTime > 0)
+   {
+      int bosBar = iBarShift(_Symbol, PERIOD_CURRENT, level1BreakTime);
+      if(bosBar > 0)
       {
-         double close = iClose(_Symbol, PERIOD_CURRENT, i);
-         if(close > szTopPrice)
+         // Scan from the most recent candle backwards to the BoS candle
+         for(int i = 2; i < bosBar; i++)
          {
-            szMitigated = true;
-            if(ObjectFind(0, "SupplyZone_Label") >= 0)
-               ObjectSetString(0, "SupplyZone_Label", OBJPROP_TEXT, "SZ (mitigated)");
-            break;
+            double high = iHigh(_Symbol, PERIOD_CURRENT, i);
+            double low  = iLow(_Symbol, PERIOD_CURRENT, i);
+            
+            // If any candle touches the SZ (wick or body)
+            if(high >= szBottomPrice && low <= szTopPrice)
+            {
+               szMitigated = true;
+               szRightEdgeTime = 0;
+               if(ObjectFind(0, "SupplyZone_Label") >= 0)
+                  ObjectSetString(0, "SupplyZone_Label", OBJPROP_TEXT, "SZ (mitigated)");
+               return;
+            }
          }
       }
    }
@@ -260,17 +294,140 @@ bool IsMBMitigated(double zoneTop, double zoneBottom, datetime drawTime)
    return false;
 }
 
+//+------------------------------------------------------------------+
+//| Update MB Status                                                 |
+//+------------------------------------------------------------------+
 void UpdateMBStatus()
 {
-   if(mbDrawTime == 0) return;
+   // SBT-2 logic handles MB mitigation based on trade attempts.
+   return;
+}
 
-   if(!mbMitigated)
+//+------------------------------------------------------------------+
+//| Update BBB Status (Bullish Breaker Block)                        |
+//+------------------------------------------------------------------+
+void UpdateBBBStatus()
+{
+   if(!bbbConfirmed || bbbMitigated) return;
+   if(bbbTopPrice <= 0 || bbbBottomPrice <= 0) return;
+   if(bbbConfirmationTime <= 0) return;
+
+   int confirmBar = iBarShift(_Symbol, PERIOD_CURRENT, bbbConfirmationTime);
+   if(confirmBar <= 0) return;
+
+   // Scan strictly AFTER the MSS confirmation bar
+   for(int i = confirmBar - 1; i >= 1; i--)
    {
-      if(IsMBMitigated(mbTopPrice, mbBottomPrice, mbDrawTime))
+      double high = iHigh(_Symbol, PERIOD_CURRENT, i);
+      double low  = iLow(_Symbol, PERIOD_CURRENT, i);
+      
+      if(high >= bbbBottomPrice && low <= bbbTopPrice)
       {
-         mbMitigated = true;
-         if(ObjectFind(0, "MB_Label") >= 0)
-            ObjectSetString(0, "MB_Label", OBJPROP_TEXT, "MB (mitigated)");
+         bbbMitigated = true;
+         if(ObjectFind(0, "BBB_Label") >= 0)
+            ObjectSetString(0, "BBB_Label", OBJPROP_TEXT, "BBB (mitigated)");
+         return;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Update QML Status                                                |
+//+------------------------------------------------------------------+
+void UpdateQMLStatus()
+{
+   if(!qmlConfirmed || qmlMitigated) return;
+   if(qmlTopPrice <= 0 || qmlBottomPrice <= 0 || qmlDrawTime <= 0) return;
+
+   int drawBar = iBarShift(_Symbol, PERIOD_CURRENT, qmlDrawTime);
+   if(drawBar < 0) return;
+
+   for(int i = drawBar - 1; i >= 1; i--)
+   {
+      double high = iHigh(_Symbol, PERIOD_CURRENT, i);
+      double low  = iLow(_Symbol, PERIOD_CURRENT, i);
+      if(high >= qmlBottomPrice && low <= qmlTopPrice)
+      {
+         qmlMitigated = true;
+         if(ObjectFind(0, "QML_Label") >= 0)
+            ObjectSetString(0, "QML_Label", OBJPROP_TEXT, "QML (mitigated)");
+         return;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Update DB Status (Double Bottom)                                 |
+//+------------------------------------------------------------------+
+void UpdateDBStatus()
+{
+   if(!dbConfirmed || dbMitigated) return;
+   if(dbBottomPrice <= 0 || dbDrawTime <= 0) return;
+
+   int drawBar = iBarShift(_Symbol, PERIOD_CURRENT, dbDrawTime);
+   if(drawBar < 0) return;
+
+   for(int i = drawBar - 1; i >= 1; i--)
+   {
+      double close = iClose(_Symbol, PERIOD_CURRENT, i);
+      if(close < dbBottomPrice)
+      {
+         dbMitigated = true;
+         if(ObjectFind(0, "DB_Label") >= 0)
+            ObjectSetString(0, "DB_Label", OBJPROP_TEXT, "DB (mitigated)");
+         return;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Update DT Status (Double Top)                                    |
+//+------------------------------------------------------------------+
+void UpdateDTStatus()
+{
+   if(!dtConfirmed || dtMitigated) return;
+   if(dtTopPrice <= 0 || dtDrawTime <= 0) return;
+
+   int drawBar = iBarShift(_Symbol, PERIOD_CURRENT, dtDrawTime);
+   if(drawBar < 0) return;
+
+   for(int i = drawBar - 1; i >= 1; i--)
+   {
+      double close = iClose(_Symbol, PERIOD_CURRENT, i);
+      if(close > dtTopPrice)
+      {
+         dtMitigated = true;
+         if(ObjectFind(0, "DT_Label") >= 0)
+            ObjectSetString(0, "DT_Label", OBJPROP_TEXT, "DT (mitigated)");
+         return;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Update SBB Status (Bearish Breaker Block)                        |
+//+------------------------------------------------------------------+
+void UpdateSBBStatus()
+{
+   if(!sbbConfirmed || sbbMitigated) return;
+   if(sbbTopPrice <= 0 || sbbBottomPrice <= 0) return;
+   if(sbbConfirmationTime <= 0) return;
+
+   int confirmBar = iBarShift(_Symbol, PERIOD_CURRENT, sbbConfirmationTime);
+   if(confirmBar <= 0) return;
+
+   // Scan strictly AFTER the MSS confirmation bar
+   for(int i = confirmBar - 1; i >= 1; i--)
+   {
+      double high = iHigh(_Symbol, PERIOD_CURRENT, i);
+      double low  = iLow(_Symbol, PERIOD_CURRENT, i);
+      
+      if(high >= sbbBottomPrice && low <= sbbTopPrice)
+      {
+         sbbMitigated = true;
+         if(ObjectFind(0, "SBB_Label") >= 0)
+            ObjectSetString(0, "SBB_Label", OBJPROP_TEXT, "SBB (mitigated)");
+         return;
       }
    }
 }
