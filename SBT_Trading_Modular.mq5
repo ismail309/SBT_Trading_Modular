@@ -59,10 +59,24 @@ void OnTick()
       abcdeChochFiredThisBar = false;  // reset priority flag each new bar
    }
 
-   // Real-time partial / breakeven management
+   // =================================================================
+   // 1. REAL-TIME POSITION MANAGEMENT & SBT-2 ENTRY (Runs every tick)
+   // =================================================================
    CheckPartialProfit();
    UpdatePositionManagement();
+   
+    if(!trendContinuationConfirmed)
+   {
+      CheckSBT1Entry();
+      // CheckSBT2Entry();
+      //CheckSBT3Entry();
+      MonitorMBTrade();
+   }
 
+   // =================================================================
+   // 2. BAR-CLOSE LOGIC (Only runs on new bars)
+   // =================================================================
+   
    if(!newBar) return;
 
    totalBars = Bars(_Symbol, PERIOD_CURRENT);
@@ -78,6 +92,16 @@ void OnTick()
 
    UpdateMBStatus();
 
+   // MSS zone mitigation tracking
+   UpdateBBBStatus();
+   UpdateQMLStatus();
+   UpdateDBStatus();
+   UpdateDTStatus();
+   UpdateSBBStatus();
+
+   // Grow live zones' right edge to last closed bar
+   ExtendZoneRightEdges();
+
    CheckTrendContinuation();
 
    // ============ ABCDE RULE CHECK + Update ============
@@ -92,8 +116,6 @@ void OnTick()
 
    UpdateABCDE(abcdeRuleFired, abcdeRuleUsed, abcdeTriggerPrice);
 
-   if(!trendContinuationConfirmed)
-      CheckSBT1Entry();
 
    // ============ CHOCH CONFIRMATION (skip if ABCDE fired this bar) ============
    if(!abcdeChochFiredThisBar && !chochConfirmed && currentChoChLevel > 0)
@@ -315,7 +337,10 @@ void OnTick()
             double level1Price = (trendDirection == 1) ? referenceHighForInvalidation : referenceLowForInvalidation;
             FindMitigationBlock(preRetracementBar, level2BarNumber, mbStartTime, mbEndTime, mbBottom, mbTop, level1Price);
             if(mbStartTime > 0 && mbTop > mbBottom)
-               DrawMitigationBlock(mbStartTime, mbBottom, mbTop, retracementStartTime);
+            {
+               datetime currentTime = iTime(_Symbol, PERIOD_CURRENT, 1);
+               DrawMitigationBlock(mbStartTime, mbBottom, mbTop, currentTime, level1BreakTime);
+            }
          }
 
          retracementStarted = false;
