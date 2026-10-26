@@ -17,6 +17,9 @@
 #include <SBT/SBT_ABCDE.mqh>
 #include <SBT/SBT_Entry_Models.mqh>
 #include <SBT/SBT_Position.mqh>
+#include <SBT/HTF_Trend.mqh>
+#include <SBT/HTF_Drawing.mqh>
+#include <SBT/SBT_Dashboard.mqh>
 
 //+------------------------------------------------------------------+
 //| Expert initialization                                            |
@@ -24,7 +27,10 @@
 int OnInit()
 {
    ea_magic = MagicNumber;
-   trendDirection = TrendDirection;
+   // trendDirection = TrendDirection;
+   
+   if(UseHTFTrendFilter)
+   Print("   HTF Filter: ", EnumToString(HTF_Period), " ON");
 
    Print("========================================");
    Print("SBT_TRADING EA INITIALIZED");
@@ -40,6 +46,7 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   DeleteDashboard();
    Print("SBT_TRADING EA deinitialized");
 }
 
@@ -59,6 +66,10 @@ void OnTick()
       abcdeChochFiredThisBar = false;  // reset priority flag each new bar
    }
 
+   // Update HTF trend (runs only on new HTF bar internally)
+   if(UseHTFTrendFilter)
+      UpdateHTFTrend();
+      
    // =================================================================
    // 1. REAL-TIME POSITION MANAGEMENT & SBT-2 ENTRY (Runs every tick)
    // =================================================================
@@ -68,8 +79,8 @@ void OnTick()
     if(!trendContinuationConfirmed)
    {
       CheckSBT1Entry();
-      // CheckSBT2Entry();
-      //CheckSBT3Entry();
+      CheckSBT2Entry();
+      CheckSBT3Entry();
       MonitorMBTrade();
    }
 
@@ -78,6 +89,14 @@ void OnTick()
    // =================================================================
    
    if(!newBar) return;
+   
+    if(ObjectFind(0, "MotherCandle_Box") >= 0)
+      Print("✅ Box exists on chart at ", TimeToString((datetime)ObjectGetInteger(0, "MotherCandle_Box", OBJPROP_TIME, 0)));
+   else
+      Print("❌ Box not found");
+      
+   // Refresh dashboard
+   UpdateDashboard();
 
    totalBars = Bars(_Symbol, PERIOD_CURRENT);
    if(totalBars < 10) return;
@@ -113,11 +132,14 @@ void OnTick()
       abcdeRuleFired = CheckBullishRetracementRulesABCDE(abcdeRuleUsed, abcdeTriggerPrice);
    else
       abcdeRuleFired = CheckBearishRetracementRulesABCDE(abcdeRuleUsed, abcdeTriggerPrice);
+   
+   // FORCE ABCDE to update if it is already active (tracking B, C, D)
+   if(abcdeActive)
+      abcdeRuleFired = true; 
+   
+      UpdateABCDE(abcdeRuleFired, abcdeRuleUsed, abcdeTriggerPrice);
 
-   UpdateABCDE(abcdeRuleFired, abcdeRuleUsed, abcdeTriggerPrice);
-
-
-   // ============ CHOCH CONFIRMATION (skip if ABCDE fired this bar) ============
+      // ============ CHOCH CONFIRMATION ============
    if(!abcdeChochFiredThisBar && !chochConfirmed && currentChoChLevel > 0)
    {
       double currentClose = iClose(_Symbol, PERIOD_CURRENT, 1);
@@ -132,8 +154,17 @@ void OnTick()
          {
             chochConfirmed = true;
             Print("🎯 CHOCH/MSS CONFIRMED! (Bullish → Bearish)");
-            DrawChoChConfirmation(currentChoChLevel, currentBarTime);
+            DrawChoChConfirmation(currentChoChLevel, iTime(_Symbol, PERIOD_CURRENT, 1));
+            
+            // 1. Switch Trend First (Draws QML/BBB/DT using existing MB/SZ data)
             SwitchToBearish(currentClose, currentBarTime);
+            
+            // 2. Then Reset ABCDE (Clears waves)
+            ResetABCDE(); 
+            
+            htfLastSwitchReason = "HTF ChoCh/MSS";
+            htfLastSwitchTime = iTime(_Symbol, PERIOD_CURRENT, 1);
+            UpdateDashboard();
          }
       }
       else if(trendDirection == -1)
@@ -145,18 +176,29 @@ void OnTick()
          {
             chochConfirmed = true;
             Print("🎯 CHOCH/MSS CONFIRMED! (Bearish → Bullish)");
-            DrawChoChConfirmation(currentChoChLevel, currentBarTime);
+            DrawChoChConfirmation(currentChoChLevel, iTime(_Symbol, PERIOD_CURRENT, 1));
+            
+            // 1. Switch Trend First
             SwitchToBullish(currentClose, currentBarTime);
+            
+            // 2. Then Reset ABCDE
+            ResetABCDE(); 
+            
+            htfLastSwitchReason = "HTF ChoCh/MSS";
+            htfLastSwitchTime = iTime(_Symbol, PERIOD_CURRENT, 1);
+            UpdateDashboard();
          }
       }
    }
-
+   
    // ============ UPDATE HH/LL WITH TIME ============
    if(trendDirection == 1)
    {
       double currentCandleHigh = iHigh(_Symbol, PERIOD_CURRENT, 1);
       if(currentCandleHigh > highestHighSinceTrendStart)
       {
+         Print("🔼 HH Updated: Old=", highestHighSinceTrendStart, " New=", currentCandleHigh, 
+               " Time=", TimeToString(iTime(_Symbol, PERIOD_CURRENT, 1)));
          highestHighSinceTrendStart = currentCandleHigh;
          highestHighSinceTrendStart_Time = iTime(_Symbol, PERIOD_CURRENT, 1);
       }
@@ -166,6 +208,8 @@ void OnTick()
       double currentCandleLow = iLow(_Symbol, PERIOD_CURRENT, 1);
       if(currentCandleLow < lowestLowSinceTrendStart)
       {
+         Print("🔽 LL Updated: Old=", lowestLowSinceTrendStart, " New=", currentCandleLow, 
+               " Time=", TimeToString(iTime(_Symbol, PERIOD_CURRENT, 1)));
          lowestLowSinceTrendStart = currentCandleLow;
          lowestLowSinceTrendStart_Time = iTime(_Symbol, PERIOD_CURRENT, 1);
       }
@@ -185,6 +229,20 @@ void OnTick()
 
       if(invalidated)
       {
+      
+      
+         // DEBUG LOG
+         Print("========================================");
+         Print("⚠️ RETRACEMENT INVALIDATED");
+         Print("   Close Price: ", currentClose);
+         Print("   Locked Ref Price: ", referenceHighForInvalidation);
+         Print("   Time: ", TimeToString(currentBarTimeForLabel));
+         Print("========================================");
+         
+          // ADD THESE TWO LINES
+         ObjectDelete(0, "MotherCandle_Box");
+         ObjectDelete(0, "MotherCandle_Label");
+         
          ObjectDelete(0, "BBB_Rectangle");
          ObjectDelete(0, "BBB_Label");
          ObjectDelete(0, "QML_Rectangle");
@@ -349,6 +407,7 @@ void OnTick()
    }
 
    // ============ LOOK FOR NEW RETRACEMENT ============
+   // Only look for a new retracement if one hasn't started AND no Mother Candle is currently being tracked.
    if(!retracementStarted)
    {
       int ruleUsed = 0;
@@ -357,22 +416,34 @@ void OnTick()
       if(CheckRetracementRules(ruleUsed, triggerCandlePrice))
       {
          double refPrice = 0;
+         datetime trendStartTime = (trendDirection == 1) ? highestHighSinceTrendStart_Time : lowestLowSinceTrendStart_Time;
+         datetime retracementTime = iTime(_Symbol, PERIOD_CURRENT, 1);
+         
          if(trendDirection == 1)
          {
-            refPrice = MathMax(triggerCandlePrice, highestHighSinceTrendStart);
+            refPrice = FindHighestHighBetween(trendStartTime, retracementTime);
+            if(refPrice <= 0) refPrice = MathMax(triggerCandlePrice, highestHighSinceTrendStart);
             referenceHighForInvalidation = refPrice;
          }
          else
          {
-            refPrice = MathMin(triggerCandlePrice, lowestLowSinceTrendStart);
+            refPrice = FindLowestLowBetween(trendStartTime, retracementTime);
+            if(refPrice <= 0) refPrice = MathMin(triggerCandlePrice, lowestLowSinceTrendStart);
             referenceLowForInvalidation = refPrice;
          }
 
          retracementStarted = true;
-         retracementStartTime = iTime(_Symbol, PERIOD_CURRENT, 1);
+         retracementStartTime = retracementTime;
          retracementRuleUsed = ruleUsed;
 
          DrawLevel3Line(refPrice, retracementStartTime, currentBarTime);
+         
+         Print("========================================");
+         Print("📊 RETRACEMENT CONFIRMED (Level 3 Locked)");
+         Print("   Rule Used: ", ruleUsed);
+         Print("   Level 3 Price: ", refPrice);
+         Print("   Tracking suspended until next BoS");
+         Print("========================================");
       }
    }
 }
