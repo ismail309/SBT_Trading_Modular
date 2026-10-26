@@ -864,5 +864,41 @@ void DrawSBT2OverlapMarker(datetime candleTime, double topPrice, double bottomPr
    ObjectSetInteger(0, "SBT2_Overlap_Label", OBJPROP_ANCHOR, ANCHOR_LOWER);
 }
 
+
+void DrawMotherCandleBox(datetime candleTime, double topPrice, double bottomPrice, string labelText)
+{
+   if(candleTime <= 0 || topPrice <= 0 || bottomPrice <= 0) return;
+   
+   if(topPrice < bottomPrice)
+   {
+      double temp = topPrice;
+      topPrice = bottomPrice;
+      bottomPrice = temp;
+   }
+   
+   int periodSeconds = PeriodSeconds(PERIOD_CURRENT);
+   datetime startTime = candleTime;
+   datetime endTime = candleTime + periodSeconds;
+   
+   ObjectDelete(0, "MotherCandle_Box");
+   ObjectDelete(0, "MotherCandle_Label");
+   
+   // Use OBJ_RECTANGLE_LABEL? No, OBJ_RECTANGLE requires chart coordinates.
+   bool created = ObjectCreate(0, "MotherCandle_Box", OBJ_RECTANGLE, 0, startTime, topPrice, endTime, bottomPrice);
+   
+   ObjectSetInteger(0, "MotherCandle_Box", OBJPROP_COLOR, clrOrange);
+   ObjectSetInteger(0, "MotherCandle_Box", OBJPROP_STYLE, STYLE_SOLID);
+   ObjectSetInteger(0, "MotherCandle_Box", OBJPROP_WIDTH, 3); // Thicker
+   ObjectSetInteger(0, "MotherCandle_Box", OBJPROP_FILL, true); // Filled for visibility
+   ObjectSetInteger(0, "MotherCandle_Box", OBJPROP_BACK, false);
+   
+   ObjectCreate(0, "MotherCandle_Label", OBJ_TEXT, 0, startTime, topPrice);
+   ObjectSetString(0, "MotherCandle_Label", OBJPROP_TEXT, labelText);
+   ObjectSetInteger(0, "MotherCandle_Label", OBJPROP_COLOR, clrOrange);
+   ObjectSetInteger(0, "MotherCandle_Label", OBJPROP_FONTSIZE, 10);
+   
+   Print("🔍 DEBUG: ObjectCreate result: ", created, " | Name: MotherCandle_Box | Time: ", TimeToString(startTime), " | Top: ", topPrice, " | Bottom: ", bottomPrice);
+}
+
 #endif // SBT_DRAWING_MQH
 //+------------------------------------------------------------------+

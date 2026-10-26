@@ -14,60 +14,38 @@
 //+------------------------------------------------------------------+
 void ResetABCDE();
 
-//+------------------------------------------------------------------+
-//| Detect Trend                                                     |
-//+------------------------------------------------------------------+
 void DetectTrend()
 {
-   if(trendDirection == 1)
+   if(totalBars < 50) return;
+   if(bullishTrendEstablished || bearishTrendEstablished) return;
+   
+   int shift = 50;
+   double pastHigh = iHigh(_Symbol, PERIOD_CURRENT, shift);
+   double pastLow  = iLow(_Symbol, PERIOD_CURRENT, shift);
+   double currPrice = iClose(_Symbol, PERIOD_CURRENT, 1);
+   
+   if(currPrice > pastHigh)
    {
-      if(!bullishTrendEstablished)
-      {
-         for(int i = totalBars - 1; i >= 0; i--)
-         {
-            double candleHigh = iHigh(_Symbol, PERIOD_CURRENT, i);
-            if(i == totalBars - 1)
-            {
-               highestHighSinceTrendStart = candleHigh;
-               highestHighSinceTrendStart_Time = iTime(_Symbol, PERIOD_CURRENT, i);
-               continue;
-            }
-            if(candleHigh > highestHighSinceTrendStart)
-            {
-               bullishTrendEstablished = true;
-               highestHighSinceTrendStart = candleHigh;
-               highestHighSinceTrendStart_Time = iTime(_Symbol, PERIOD_CURRENT, i);
-               trendStartTimeGlobal = highestHighSinceTrendStart_Time;
-               Print("✅ BULLISH TREND ESTABLISHED at ", highestHighSinceTrendStart);
-               break;
-            }
-         }
-      }
+      trendDirection = 1;
+      bullishTrendEstablished = true;
+      bearishTrendEstablished = false;
+      highestHighSinceTrendStart = iHigh(_Symbol, PERIOD_CURRENT, 1);
+      highestHighSinceTrendStart_Time = iTime(_Symbol, PERIOD_CURRENT, 1);
+      Print("✅ LTF BULLISH (Price > 50-bar High: ", pastHigh, ")");
+   }
+   else if(currPrice < pastLow)
+   {
+      trendDirection = -1;
+      bearishTrendEstablished = true;
+      bullishTrendEstablished = false;
+      lowestLowSinceTrendStart = iLow(_Symbol, PERIOD_CURRENT, 1);
+      lowestLowSinceTrendStart_Time = iTime(_Symbol, PERIOD_CURRENT, 1);
+      Print("✅ LTF BEARISH (Price < 50-bar Low: ", pastLow, ")");
    }
    else
    {
-      if(!bearishTrendEstablished)
-      {
-         for(int i = totalBars - 1; i >= 0; i--)
-         {
-            double candleLow = iLow(_Symbol, PERIOD_CURRENT, i);
-            if(i == totalBars - 1)
-            {
-               lowestLowSinceTrendStart = candleLow;
-               lowestLowSinceTrendStart_Time = iTime(_Symbol, PERIOD_CURRENT, i);
-               continue;
-            }
-            if(candleLow < lowestLowSinceTrendStart)
-            {
-               bearishTrendEstablished = true;
-               lowestLowSinceTrendStart = candleLow;
-               lowestLowSinceTrendStart_Time = iTime(_Symbol, PERIOD_CURRENT, i);
-               bearishTrendStartTime = lowestLowSinceTrendStart_Time;
-               Print("✅ BEARISH TREND ESTABLISHED at ", lowestLowSinceTrendStart);
-               break;
-            }
-         }
-      }
+      trendDirection = 0;
+      Print("⏸️ LTF SIDEWAYS (Price inside 50-bar range)");
    }
 }
 
@@ -330,6 +308,9 @@ void SwitchToBearish(double closePrice, datetime currentBarTime)
    ObjectDelete(0, "SL_Label");
    ObjectDelete(0, "SBT3_FVG_Rectangle");
    ObjectDelete(0, "SBT3_FVG_Label");
+   
+   ObjectDelete(0, "MotherCandle_Box");
+   ObjectDelete(0, "MotherCandle_Label");
 
    Print("✅ BEARISH TREND ACTIVATED with SBB, QML, DT");
 }
@@ -355,6 +336,7 @@ void CleanupMSSZonesKeepNormal()
    // Cleanup SBT-2 Overlap marker
    ObjectDelete(0, "SBT2_Overlap_Box");
    ObjectDelete(0, "SBT2_Overlap_Label");
+   
    
    sbt2_saved_extreme = 0;
    mbFvgFound = false;

@@ -7,6 +7,7 @@
 #define SBT_ENTRY_MODELS_MQH
 
 #include "SBT_Zones.mqh"
+#include "HTF_Trend.mqh"
 
 //+------------------------------------------------------------------+
 //| Helper: Check if a candle is a Doji (Based on 5-candle scan avg) |
@@ -187,6 +188,9 @@ void CheckSBT1Entry()
 
    if(currentSLPrice <= 0) return;
    if(!CanOpenNewPosition()) return;
+   
+   // NEW: HTF ALIGNMENT FILTER
+   if(!IsTradeAlignedWithHTF(trendDirection)) return;
 
    if(trendDirection == 1)  // BULLISH (DZ)
    {
@@ -277,6 +281,9 @@ void CheckSBT2Entry()
    if(mbMitigated) return;
    if(mbEntryCount >= 2) return;
    if(level1BreakTime <= 0) return;
+   
+   // NEW: HTF ALIGNMENT FILTER
+   if(!IsTradeAlignedWithHTF(trendDirection)) return;
 
    if(mbPositionTicket > 0)
    {
@@ -476,11 +483,14 @@ void CheckSBT2Entry()
 //| Check SBT-3 Entry (MB Overlap with FVG)                          |
 //+------------------------------------------------------------------+
 void CheckSBT3Entry()
-{
+{   
    if(mbTopPrice <= 0 || mbBottomPrice <= 0) return;
    if(mbMitigated) return;
    if(mbEntryCount >= 2) return;
    if(level1BreakTime <= 0) return;
+   
+   // NEW: HTF ALIGNMENT FILTER
+   if(!IsTradeAlignedWithHTF(trendDirection)) return;
 
    // Handle existing position / TP check
    if(mbPositionTicket > 0)

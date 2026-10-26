@@ -8,6 +8,74 @@
 
 #include "SBT_Common.mqh"
 
+//=========================================================
+// HTF TREND STATE (Full Parallel to LTF)
+//=========================================================
+int      htfTotalBars                      = 0;
+int      htfTrendDirection                 = 0; // 0 = undefined
+
+// HTF Bullish
+bool     htfBullishEstablished             = false;
+double   htfHighestHighSinceTrendStart     = 0;
+datetime htfHighestHighSinceTrendStart_Time = 0;
+
+// HTF Bearish
+bool     htfBearishEstablished             = false;
+double   htfLowestLowSinceTrendStart       = 0;
+datetime htfLowestLowSinceTrendStart_Time  = 0;
+
+// HTF Retracement
+bool     htfRetracementStarted             = false;
+datetime htfRetracementStartTime           = 0;
+int      htfRetracementRuleUsed            = 0;
+double   htfReferenceHighForInvalidation   = 0;
+double   htfReferenceLowForInvalidation    = 0;
+
+// HTF Mother Candle
+bool     htfMotherCandleActive             = false;
+double   htfMotherCandleOpen               = 0;
+double   htfMotherCandleHigh               = 0;
+double   htfMotherCandleLow                = 0;
+datetime htfMotherCandleTime               = 0;
+
+// HTF ChoCh
+bool     htfChochConfirmed                 = false;
+double   htfCurrentChochLevel              = 0;
+
+// HTF Levels
+double   htfLevel1Price                    = 0;
+datetime htfLevel1BreakTime                = 0;
+double   htfLevel2Price                    = 0;
+double   htfLevel3Price                    = 0;
+datetime htfLevel3DrawTime                 = 0;
+
+// HTF ABCDE
+bool     htfAbcdeActive                    = false;
+int      htfAbcdeWave                      = 0;
+double   htfAbcde0                         = 0;
+double   htfAbcdeA                         = 0;
+double   htfAbcdeB                         = 0;
+double   htfAbcdeC                         = 0;
+double   htfAbcdeD                         = 0;
+datetime htfAbcde0_Time                    = 0;
+datetime htfAbcdeA_Time                    = 0;
+datetime htfAbcdeB_Time                    = 0;
+datetime htfAbcdeC_Time                    = 0;
+datetime htfAbcdeD_Time                    = 0;
+int      htfAbcdeRetraceRuleCount          = 0;
+bool     htfAbcdeA_BodyBroken              = false;
+
+// HTF Trend Switch Tracking
+string   htfLastSwitchReason   = "None";
+datetime htfLastSwitchTime     = 0;
+string   htfPendingChochOrigin = "Normal"; // "Normal" or "ABCDE 5-Wave"
+
+bool htfForceFlipped = false;
+
+//=========================================================
+// LTF TREND STATE
+//=====================================================
+
 //--- Trend & Detection
 int      trendDirection                    = 1;
 int      totalBars                         = 0;

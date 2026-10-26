@@ -155,6 +155,19 @@ bool CheckRetracementRules(int &ruleUsed, double &triggerPrice)
    bool currBullish = IsBullish(1);
    bool prevBullish = IsBullish(2);
    bool prevBearish = IsBearish(2);
+   
+    // NEW: Prevent new retracement from starting if price hasn't closed beyond the reference
+   if(retracementStarted)
+   {
+      bool invalidated = false;
+      if(trendDirection == 1)
+         invalidated = (currClose1 > referenceHighForInvalidation);
+      else
+         invalidated = (currClose1 < referenceLowForInvalidation);
+         
+      // If it's not invalidated, we don't check for new rules yet
+      if(!invalidated) return false;
+   }
 
    Print("========================================");
    Print("🔍 CHECKING RETRACEMENT RULES - START");
@@ -178,91 +191,117 @@ bool CheckRetracementRules(int &ruleUsed, double &triggerPrice)
    Print("========================================");
 
    // ========== PRIORITY LOCKING ==========
+         // ========== PRIORITY LOCKING ==========
    if(motherCandleActive)
    {
-      Print("🔒 MOTHER CANDLE ACTIVE - Locking Rules 1 & 2");
-      Print("   Only checking Mother Candle conditions...");
-      Print("========================================");
+       Print("🔍 mother candle is ??????");
+      // Get the exact bar index of the Mother Candle
+      int motherBar = iBarShift(_Symbol, PERIOD_CURRENT, motherCandleTime, false);
+      if(motherBar < 1) motherBar = 1;
 
-      if(trendDirection == 1)  // BULLISH - Mother Candle is bearish
+      if(trendDirection == 1)  // BULLISH
       {
-         double latestClose = iClose(_Symbol, PERIOD_CURRENT, 1);
-         bool latestBullish = IsBullish(1);
-         bool latestBearish = IsBearish(1);
-
-         Print("📊 BULLISH TREND - Mother Candle (Bearish) Tracking:");
-         Print("   Mother Open: ", DoubleToString(motherCandleOpen, _Digits));
-         Print("   Mother Low: ", DoubleToString(motherCandleLow, _Digits));
-         Print("   Latest Close: ", DoubleToString(latestClose, _Digits));
-         Print("   Latest Bullish? ", latestBullish);
-         Print("   Latest Bearish? ", latestBearish);
-         Print("   Latest Close > Mother Open? ", latestClose > motherCandleOpen);
-         Print("   Latest Close < Mother Low? ", latestClose < motherCandleLow);
-
-         if(latestBullish && latestClose > motherCandleOpen)
+         bool invalidated = false;
+         bool triggered = false;
+         
+         // Scan ALL candles from the most recent (Bar 1) down to the Mother Candle
+         for(int i = 1; i <= motherBar; i++)
          {
-            Print("   ❌ Mother Candle CANCELLED - Bullish closed above mother open");
+            double cOpen = iOpen(_Symbol, PERIOD_CURRENT, i);
+            double cClose = iClose(_Symbol, PERIOD_CURRENT, i);
+            
+            // 1. Check for Invalidation (Bullish body closes above Mother Open)
+            if(cClose > cOpen && cClose > motherCandleOpen)
+            {
+               invalidated = true;
+               Print("   ❌ Mother Candle CANCELLED - Bullish candle at bar ", i, " (", TimeToString(iTime(_Symbol, PERIOD_CURRENT, i)), ") closed above Mother Open (", motherCandleOpen, ")");
+               break;
+            }
+            
+            // 2. Check for Rule 3 Trigger (Bearish body closes below Mother Low)
+            if(cClose < cOpen && cClose < motherCandleLow)
+            {
+               triggered = true;
+            }
+         }
+         
+         if(invalidated)
+         {
             motherCandleActive = false;
+            ObjectDelete(0, "MotherCandle_Box");
+            ObjectDelete(0, "MotherCandle_Label");
             Print("   🔓 Rules 1 & 2 UNLOCKED");
             Print("========================================");
             return false;
          }
-         else if(latestBearish && latestClose < motherCandleLow)
+         
+         if(triggered)
          {
             ruleUsed = 3;
-            triggerPrice = iHigh(_Symbol, PERIOD_CURRENT, 1);
+            triggerPrice = currHigh1;
             motherCandleActive = false;
+            ObjectDelete(0, "MotherCandle_Box");
+            ObjectDelete(0, "MotherCandle_Label");
             Print("   ✅ RULE 3 TRIGGERED! (Mother Candle)");
-            Print("   Trigger Price (High): ", DoubleToString(triggerPrice, _Digits));
             Print("========================================");
             return true;
          }
-         else
-         {
-            Print("   ⏳ Mother Candle still active - Waiting for trigger or cancel");
-            Print("========================================");
-            return false;
-         }
+         
+         Print("   ⏳ Mother Candle still active - Waiting for trigger or cancel");
+         Print("========================================");
+         return false;
       }
-      else  // BEARISH - Mother Candle is bullish
+      else  // BEARISH
       {
-         double latestClose = iClose(_Symbol, PERIOD_CURRENT, 1);
-         bool latestBullish = IsBullish(1);
-         bool latestBearish = IsBearish(1);
-
-         Print("📊 BEARISH TREND - Mother Candle (Bullish) Tracking:");
-         Print("   Mother Open: ", DoubleToString(motherCandleOpen, _Digits));
-         Print("   Mother High: ", DoubleToString(motherCandleHigh, _Digits));
-         Print("   Latest Close: ", DoubleToString(latestClose, _Digits));
-         Print("   Latest Bullish? ", latestBullish);
-         Print("   Latest Bearish? ", latestBearish);
-         Print("   Latest Close < Mother Open? ", latestClose < motherCandleOpen);
-         Print("   Latest Close > Mother High? ", latestClose > motherCandleHigh);
-
-         if(latestBearish && latestClose < motherCandleOpen)
+         bool invalidated = false;
+         bool triggered = false;
+         
+         // Scan ALL candles from the most recent (Bar 1) down to the Mother Candle
+         for(int i = 1; i <= motherBar; i++)
          {
-            Print("   ❌ Mother Candle CANCELLED - Bearish closed below mother open");
+            double cOpen = iOpen(_Symbol, PERIOD_CURRENT, i);
+            double cClose = iClose(_Symbol, PERIOD_CURRENT, i);
+            
+            // 1. Check for Invalidation (Bearish body closes below Mother Open)
+            if(cClose < cOpen && cClose < motherCandleOpen)
+            {
+               invalidated = true;
+               Print("   ❌ Mother Candle CANCELLED - Bearish candle at bar ", i, " (", TimeToString(iTime(_Symbol, PERIOD_CURRENT, i)), ") closed below Mother Open (", motherCandleOpen, ")");
+               break;
+            }
+            
+            // 2. Check for Rule 3 Trigger (Bullish body closes above Mother High)
+            if(cClose > cOpen && cClose > motherCandleHigh)
+            {
+               triggered = true;
+            }
+         }
+         
+         if(invalidated)
+         {
             motherCandleActive = false;
+            ObjectDelete(0, "MotherCandle_Box");
+            ObjectDelete(0, "MotherCandle_Label");
             Print("   🔓 Rules 1 & 2 UNLOCKED");
             Print("========================================");
             return false;
          }
-         else if(latestBullish && latestClose > motherCandleHigh)
+         
+         if(triggered)
          {
             ruleUsed = 3;
-            triggerPrice = iLow(_Symbol, PERIOD_CURRENT, 1);
+            triggerPrice = currLow1;
             motherCandleActive = false;
+            ObjectDelete(0, "MotherCandle_Box");
+            ObjectDelete(0, "MotherCandle_Label");
             Print("   ✅ RULE 3 TRIGGERED! (Mother Candle)");
-            Print("   Trigger Price (Low): ", DoubleToString(triggerPrice, _Digits));
             Print("========================================");
             return true;
          }
-         else
-         {
-            Print("   ⏳ Mother Candle still active - Waiting for trigger or cancel");
-            Print("========================================");
-            return false;
-         }
+         
+         Print("   ⏳ Mother Candle still active - Waiting for trigger or cancel");
+         Print("========================================");
+         return false;
       }
    }
 
@@ -301,6 +340,10 @@ bool CheckRetracementRules(int &ruleUsed, double &triggerPrice)
                motherCandleOpen = iOpen(_Symbol, PERIOD_CURRENT, i);
                motherCandleLow = iLow(_Symbol, PERIOD_CURRENT, i);
                motherCandleTime = iTime(_Symbol, PERIOD_CURRENT, i);
+                // Add debug print here
+               Print("🔍 DEBUG: Mother Candle SET (Bearish) at bar ", i, " | Time: ", TimeToString(motherCandleTime), " | Open: ", motherCandleOpen, " | Low: ", motherCandleLow);
+               
+               DrawMotherCandleBox(motherCandleTime, motherCandleOpen, motherCandleLow, "Bearish Mother");
                Print("   ✅ Mother Candle SET at Bar ", i);
                return false;
             }
@@ -338,6 +381,10 @@ bool CheckRetracementRules(int &ruleUsed, double &triggerPrice)
                motherCandleOpen = iOpen(_Symbol, PERIOD_CURRENT, i);
                motherCandleHigh = iHigh(_Symbol, PERIOD_CURRENT, i);
                motherCandleTime = iTime(_Symbol, PERIOD_CURRENT, i);
+               // Add debug print here
+               Print("🔍 DEBUG: Mother Candle SET (Bullish) at bar ", i, " | Time: ", TimeToString(motherCandleTime), " | Open: ", motherCandleOpen, " | High: ", motherCandleHigh);
+               
+               DrawMotherCandleBox(motherCandleTime, motherCandleOpen, motherCandleHigh, "Bullish Mother");
                Print("   ✅ Mother Candle SET at Bar ", i);
                return false;
             }

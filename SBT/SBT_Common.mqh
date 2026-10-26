@@ -23,6 +23,13 @@ CTrade trade;
 #define COLOR_SL     clrRed
 #define COLOR_ABCDE  clrGold
 
+//--- Input Parameters for HTF
+input bool   UseHTFTrendFilter               = true;              // Enable HTF Trend Alignment
+input ENUM_TIMEFRAMES HTF_Period             = PERIOD_H4;         // Higher Timeframe (H1/H4/D1)
+input bool   ShowHTFTrendLabel               = true;              // Show HTF trend on chart
+input int    HTF_MaxScanBars                 = 100;               // HTF max bars to scan for trend (default 100)
+input int LTF_MaxScanBars = 100;   // LTF max bars to scan for trend
+
 //--- Input Parameters
 input int    TrendDirection                = 1;      // 1 = Bullish, -1 = Bearish
 input int    SLBufferPips                  = 5;      // Stop Loss buffer in pips (Demand Candle)

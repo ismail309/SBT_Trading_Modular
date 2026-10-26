@@ -187,5 +187,16 @@ bool CanOpenNewPosition()
    return (currentPositionCount < MaxConcurrentPositions);
 }
 
+
+//+------------------------------------------------------------------+
+//| Check if LTF trade direction is aligned with HTF                 |
+//+------------------------------------------------------------------+
+bool IsTradeAlignedWithHTF(int ltfTradeDirection)
+{
+   if(!UseHTFTrendFilter) return true;
+   if(htfTrendDirection == 0) return true; // HTF sideways → LTF governs
+   return (htfTrendDirection == ltfTradeDirection);
+}
+
 #endif // SBT_UTILS_MQH
 //+------------------------------------------------------------------+
